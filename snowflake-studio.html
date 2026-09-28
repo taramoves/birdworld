@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snowflake Studio</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --night: #04090f;
+    --deep: #07111e;
+    --ink: #0c1f35;
+    --frost: #c8dff7;
+    --ice: #e8f4ff;
+    --silver: #a8c4e0;
+    --glow: #7ab8f5;
+    --cut: #ff6b6b;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--night);
+    color: var(--ice);
+    font-family: 'DM Mono', monospace;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── SCREENS ─────────────────────────────────────────── */
+  .screen { position: absolute; inset: 0; transition: opacity .6s ease; }
+  .screen.hidden { opacity: 0; pointer-events: none; }
+
+  /* ── WALL SCREEN ─────────────────────────────────────── */
+  #wall-screen {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-start;
+  }
+  #bg-canvas { position: absolute; inset: 0; z-index: 0; display: block; width: 100%; height: 100%; }
+  #wall-canvas { position: absolute; inset: 0; z-index: 1; }
+
+  .wall-ui {
+    position: relative; z-index: 10;
+    display: flex; align-items: center; gap: 24px;
+    padding: 20px 32px;
+    width: 100%;
+  }
+  .wall-title {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(18px, 2.5vw, 28px);
+    font-weight: 300;
+    letter-spacing: .25em;
+    color: var(--frost);
+    text-transform: uppercase;
+    flex: 1;
+  }
+  .wall-count {
+    font-size: 11px;
+    letter-spacing: .15em;
+    color: var(--silver);
+    opacity: .7;
+  }
+
+  .btn-primary {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--glow);
+    color: var(--glow);
+    padding: 9px 20px;
+    cursor: pointer;
+    transition: background .2s, color .2s;
+    white-space: nowrap;
+  }
+  .btn-primary:hover { background: var(--glow); color: var(--night); }
+
+  .empty-hint {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    opacity: .35;
+    transition: opacity 1s;
+  }
+  .empty-hint.fade { opacity: 0; }
+  .empty-hint p {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: clamp(14px, 2vw, 22px);
+    color: var(--silver);
+    letter-spacing: .1em;
+  }
+  .empty-hint .arrow {
+    font-size: 28px;
+    color: var(--glow);
+    display: block;
+    margin-top: 8px;
+    animation: bob .8s ease-in-out infinite alternate;
+  }
+  @keyframes bob { to { transform: translateY(-6px); } }
+
+  /* ── STUDIO POP-OUT ───────────────────────────────────── */
+  #studio-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  #studio-screen.visible {
+    pointer-events: all;
+    opacity: 1;
+  }
+  #studio-screen.hidden { opacity: 0; pointer-events: none; }
+
+  .studio-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(4, 9, 15, 0.6);
+    backdrop-filter: blur(4px);
+  }
+
+  .studio-popout {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 32px;
+    align-items: flex-start;
+    padding: 28px 32px;
+    max-width: 900px;
+    width: 100%;
+    background: var(--deep);
+    border: 1px solid rgba(122, 184, 245, 0.2);
+    border-radius: 12px;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.04);
+    pointer-events: all;
+  }
+
+  .studio-layout {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  /* Canvas area */
+  .canvas-area {
+    position: relative;
+    flex-shrink: 0;
+  }
+  #cut-canvas {
+    display: block;
+    cursor: crosshair;
+    border: 1px solid rgba(122,184,245,.2);
+    background: var(--deep);
+    touch-action: none;
+  }
+  .canvas-label {
+    position: absolute;
+    bottom: -24px; left: 0; right: 0;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: .2em;
+    color: var(--silver);
+    opacity: .5;
+  }
+
+  /* Controls panel */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    min-width: 220px;
+    padding-top: 8px;
+  }
+
+  .studio-title {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: clamp(22px, 3vw, 36px);
+    font-weight: 300;
+    letter-spacing: .2em;
+    color: var(--frost);
+    text-transform: uppercase;
+    line-height: 1.1;
+  }
+  .studio-title em {
+    display: block;
+    font-style: italic;
+    font-size: .6em;
+    color: var(--silver);
+    letter-spacing: .3em;
+  }
+
+  .control-group { display: flex; flex-direction: column; gap: 10px; }
+  .control-label {
+    font-size: 10px;
+    letter-spacing: .25em;
+    color: var(--silver);
+    text-transform: uppercase;
+    opacity: .7;
+  }
+
+  .fold-picker {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .fold-btn {
+    width: 34px; height: 34px;
+    border: 1px solid rgba(122,184,245,.25);
+    background: transparent;
+    color: var(--silver);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .fold-btn:hover { border-color: var(--glow); color: var(--ice); }
+  .fold-btn.active { background: var(--glow); border-color: var(--glow); color: var(--night); }
+
+  .color-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .color-swatch {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform .15s, border-color .15s;
+  }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.active { border-color: white; transform: scale(1.15); }
+
+  .tool-row { display: flex; gap: 8px; }
+  .tool-btn {
+    flex: 1;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid rgba(122,184,245,.2);
+    color: var(--silver);
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .tool-btn:hover { border-color: var(--silver); color: var(--ice); }
+  .tool-btn.active { background: rgba(122,184,245,.12); border-color: var(--glow); color: var(--glow); }
+
+  .instructions {
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--silver);
+    opacity: .6;
+    letter-spacing: .05em;
+  }
+
+  .action-group { display: flex; flex-direction: column; gap: 10px; }
+
+  .btn-unfold {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--glow);
+    color: var(--glow);
+    padding: 12px 20px;
+    cursor: pointer;
+    transition: background .2s, color .2s;
+  }
+  .btn-unfold:hover { background: var(--glow); color: var(--night); }
+
+  .btn-clear {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid rgba(122,184,245,.15);
+    color: var(--silver);
+    padding: 9px 20px;
+    cursor: pointer;
+    opacity: .6;
+    transition: opacity .2s;
+  }
+  .btn-clear:hover { opacity: 1; }
+
+  .btn-back {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    background: transparent;
+    border: none;
+    color: var(--silver);
+    padding: 4px 0;
+    cursor: pointer;
+    opacity: .4;
+    text-align: left;
+    transition: opacity .2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-back:hover { opacity: .9; }
+
+  /* ── UNFOLD OVERLAY ──────────────────────────────────── */
+  #unfold-overlay {
+    position: fixed; inset: 0;
+    background: rgba(4,9,15,.92);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .4s;
+  }
+  #unfold-overlay.visible { opacity: 1; pointer-events: all; }
+
+  #preview-svg {
+    max-width: min(500px, 80vw);
+    max-height: min(500px, 60vh);
+    filter: drop-shadow(0 0 30px rgba(122,184,245,.3));
+  }
+
+  .overlay-actions {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn-add-wall {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: var(--glow);
+    border: 1px solid var(--glow);
+    color: var(--night);
+    padding: 12px 28px;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .btn-add-wall:hover { background: var(--ice); border-color: var(--ice); }
+  .btn-save-svg {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid rgba(122,184,245,.35);
+    color: var(--silver);
+    padding: 12px 28px;
+    cursor: pointer;
+    transition: border-color .2s, color .2s;
+  }
+  .btn-save-svg:hover { border-color: var(--silver); color: var(--ice); }
+  .btn-cut-again {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid rgba(122,184,245,.15);
+    color: var(--silver);
+    padding: 12px 28px;
+    cursor: pointer;
+    opacity: .6;
+    transition: opacity .2s;
+  }
+  .btn-cut-again:hover { opacity: 1; }
+
+  .overlay-label {
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    font-size: clamp(13px, 1.8vw, 18px);
+    color: var(--silver);
+    letter-spacing: .15em;
+    opacity: .6;
+  }
+
+  /* responsive */
+  @media (max-width: 700px) {
+    .studio-layout { flex-direction: column; align-items: center; gap: 24px; }
+    .controls { min-width: unset; width: 100%; max-width: 400px; }
+    #cut-canvas { width: 100% !important; height: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── WALL SCREEN ──────────────────────────────────────── -->
+<div id="wall-screen" class="screen">
+  <canvas id="bg-canvas"></canvas>
+  <canvas id="wall-canvas"></canvas>
+  <div class="wall-ui">
+    <button class="btn-primary" id="open-studio-btn">Cut a Snowflake</button>
+  </div>
+</div>
+
+<!-- ── STUDIO POP-OUT ────────────────────────────────────── -->
+<div id="studio-screen" class="hidden" aria-hidden="true">
+  <div class="studio-backdrop" id="studio-backdrop"></div>
+  <div class="studio-popout">
+    <div class="studio-layout">
+      <div class="canvas-area">
+        <canvas id="cut-canvas" width="400" height="400"></canvas>
+      </div>
+
+      <div class="controls">
+        <button class="btn-back" id="back-btn" aria-label="Close">×</button>
+        <div class="control-group">
+          <div class="fold-picker" id="fold-picker"></div>
+        </div>
+        <div class="control-group">
+          <div class="color-picker-row" id="color-picker"></div>
+        </div>
+        <div class="tool-row">
+          <button class="tool-btn active" id="tool-path" data-tool="path" aria-label="Draw">✂</button>
+          <button class="tool-btn" id="tool-line" data-tool="line" aria-label="Line">—</button>
+          <button class="tool-btn" id="tool-circle" data-tool="circle" aria-label="Circle">○</button>
+        </div>
+        <div class="action-group">
+          <button class="btn-unfold" id="unfold-btn" aria-label="Unfold">✦</button>
+          <button class="btn-clear" id="clear-btn" aria-label="Clear">⌫</button>
+        </div>
+      </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="unfold-overlay">
+  <svg id="preview-svg" viewBox="-1 -1 2 2" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div class="overlay-actions">
+    <button class="btn-add-wall" id="add-wall-btn" aria-label="Add to wall">✦</button>
+    <button class="btn-save-svg" id="save-svg-btn" aria-label="Save SVG">↓</button>
+    <button class="btn-cut-again" id="cut-again-btn" aria-label="Cut again">✂</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  SNOWFLAKE APPROACHES (brainstorm for future iterations)
+// ═══════════════════════════════════════════════════════
+// • Current: Draw cuts on folded wedge → Unfold to see full 6/8/12-fold snowflake.
+// • Direct arm: Draw one “arm” with live mirror/rotate so you see the full flake as you draw (WYSIWYG).
+// • Scissors sim: Click to start cut, drag path, release — feels like cutting with scissors along a line.
+// • Punch/cut-out: Click or drag to remove circles or shapes from the paper (negative space only).
+// • Freeform full flake: Draw on an unfolded canvas with a symmetry guide (e.g. 6 segments); result shown live.
+// • Single-wedge preview: Draw on wedge but show a live mini preview of that wedge repeated around a circle.
+// • Stamps: Place preset shapes (line, curve, circle) on the wedge, then unfold.
+// • Minimal (reference): One tool “draw to cut”, Clear, Unfold — no fold picker or tools.
+
+// ═══════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════
+const state = {
+  folds: 6,
+  currentColor: { fill: '#ffffff', stroke: 'rgba(0,0,0,0.08)' },  // white paper
+  tool: 'path',
+  cuts: [],
+  currentCut: null,
+  isDrawing: false,
+  snowflakes: [],
+  currentSVGPaths: null,
+  animId: null,
+};
+
+// White paper snowflakes only (cut-paper look)
+const COLORS = [
+  { fill: '#ffffff', stroke: 'rgba(0,0,0,0.06)' },   // white
+  { fill: '#fafbfd', stroke: 'rgba(0,0,0,0.07)' },   // paper white
+  { fill: '#f5f8fc', stroke: 'rgba(0,0,0,0.08)' },   // cool white
+];
+
+// ═══════════════════════════════════════════════════════
+//  DOM REFS
+// ═══════════════════════════════════════════════════════
+const wallScreen   = document.getElementById('wall-screen');
+const studioScreen = document.getElementById('studio-screen');
+const wallCanvas   = document.getElementById('wall-canvas');
+const bgCanvas     = document.getElementById('bg-canvas');
+const cutCanvas    = document.getElementById('cut-canvas');
+const wallCtx      = wallCanvas.getContext('2d');
+const cutCtx       = cutCanvas.getContext('2d');
+const unfoldOverlay= document.getElementById('unfold-overlay');
+const previewSvg   = document.getElementById('preview-svg');
+
+// ═══════════════════════════════════════════════════════
+//  GLSL BACKGROUND — sky + golden hour snow hills + trees/shadows
+// ═══════════════════════════════════════════════════════
+const bgVs = `#version 300 es
+in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+
+const bgFs = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 outColor;
+
+// uv: x 0..1, y 0=bottom 1=top
+void main() {
+  float y = v_uv.y;
+  float x = v_uv.x;
+
+  // Sky gradient: deep blue top -> lighter blue -> golden horizon
+  vec3 skyTop = vec3(0.15, 0.25, 0.5);
+  vec3 skyMid = vec3(0.35, 0.5, 0.75);
+  vec3 skyHorizon = vec3(0.7, 0.65, 0.85);
+  vec3 golden = vec3(0.95, 0.85, 0.7);
+  float skyMix = smoothstep(0.0, 0.5, y);
+  vec3 sky = mix(skyHorizon, skyMid, smoothstep(0.0, 0.35, y));
+  sky = mix(sky, skyTop, smoothstep(0.35, 1.0, y));
+  sky = mix(sky, golden, (1.0 - y) * 0.25 * (1.0 - smoothstep(0.0, 0.15, y)));
+
+  // Hills occupy bottom ~1/5 to 2/3 of screen (we use bottom 55% for hill shapes)
+  float hillStart = 0.45;
+  float h = (hillStart - y) / hillStart;
+  if (h <= 0.0) {
+    outColor = vec4(sky, 1.0);
+    return;
+  }
+
+  // Multiple overlapping hills (smooth curves)
+  float px = x * 6.28318;
+  float hill1 = 0.35 + 0.2 * sin(px * 0.7) + 0.15 * sin(px * 1.3 + 1.0);
+  float hill2 = 0.25 + 0.25 * sin(px * 0.5 + 2.0) + 0.1 * sin(px * 2.0);
+  float hill3 = 0.2 + 0.3 * sin(px * 0.4) + 0.15 * sin(px * 1.1 + 3.0);
+  float d1 = h - hill1;
+  float d2 = h - hill2;
+  float d3 = h - hill3;
+  float d = min(min(d1, d2), d3);
+
+  // Snow color with golden hour warm tint on top
+  vec3 snowShadow = vec3(0.75, 0.78, 0.88);
+  vec3 snowMid = vec3(0.92, 0.94, 0.98);
+  vec3 snowHighlight = vec3(0.98, 0.96, 0.92);
+  float lit = 0.5 + 0.5 * sin(px * 0.6);
+  vec3 snow = mix(snowShadow, snowMid, smoothstep(-0.05, 0.2, d));
+  snow = mix(snow, snowHighlight, smoothstep(0.0, 0.35, d) * (0.4 + 0.4 * lit));
+
+  // Tree silhouettes (simple cones) on front hill
+  float tree = 1000.0;
+  for (int i = 0; i < 12; i++) {
+    float t = float(i) * 0.085 + 0.12 * sin(float(i));
+    float tx = fract(t + x * 3.0);
+    float treeBase = hill1 - 0.08 - 0.04 * sin(px * 2.0 + float(i));
+    float treeH = 0.12 + 0.04 * sin(float(i) * 1.3);
+    float cone = (h - treeBase) / treeH - (1.0 - abs(tx - 0.5) * 2.0);
+    tree = min(tree, cone);
+  }
+  vec3 treeColor = vec3(0.12, 0.2, 0.14);
+  vec3 treeShadow = vec3(0.08, 0.1, 0.12);
+  snow = mix(snow, treeShadow, smoothstep(0.02, 0.0, tree) * 0.9);
+  snow = mix(snow, treeColor, smoothstep(0.05, 0.0, tree));
+
+  // Shadow under trees / on one side of hills
+  float sideShadow = smoothstep(0.5, 0.2, x) * 0.15;
+  snow = mix(snow, snowShadow, sideShadow * smoothstep(-0.02, 0.1, d));
+
+  vec3 col = mix(sky, snow, smoothstep(0.0, 0.02, d));
+  outColor = vec4(col, 1.0);
+}
+`;
+
+let bgGl = null;
+let bgProgram = null;
+let bgBuffer = null;
+let bgCtx2d = null;
+
+function initBgGl() {
+  const gl = bgCanvas.getContext('webgl2');
+  if (!gl) return;
+  bgGl = gl;
+
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, bgVs);
+  gl.compileShader(vs);
+  if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
+    console.warn('bg vs', gl.getShaderInfoLog(vs));
+    return;
+  }
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, bgFs);
+  gl.compileShader(fs);
+  if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+    console.warn('bg fs', gl.getShaderInfoLog(fs));
+    return;
+  }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.warn('bg link', gl.getProgramInfoLog(prog));
+    return;
+  }
+  bgProgram = prog;
+
+  bgBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, bgBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+}
+
+function drawBg() {
+  if (bgGl && bgProgram && bgBuffer) {
+    const gl = bgGl;
+    gl.viewport(0, 0, bgCanvas.width, bgCanvas.height);
+    gl.useProgram(bgProgram);
+    const loc = gl.getAttribLocation(bgProgram, 'a_pos');
+    gl.bindBuffer(gl.ARRAY_BUFFER, bgBuffer);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return;
+  }
+  // 2D fallback: gradient sky + simple hills
+  if (!bgCtx2d) bgCtx2d = bgCanvas.getContext('2d');
+  const ctx = bgCtx2d;
+  if (!ctx) return;
+  const w = bgCanvas.width, h = bgCanvas.height;
+  const hillH = h * 0.55;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#2a4a7a');
+  g.addColorStop(0.5, '#4a7ab8');
+  g.addColorStop(0.85, '#7a9ed8');
+  g.addColorStop(1, '#c9b896');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#e8ebe8';
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  for (let x = 0; x <= w + 100; x += 80) {
+    const y = h - hillH * (0.4 + 0.2 * Math.sin(x * 0.02) + 0.15 * Math.sin(x * 0.015));
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(w + 100, h);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function resizeBg() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  bgCanvas.width = w * dpr;
+  bgCanvas.height = h * dpr;
+  bgCanvas.style.width = w + 'px';
+  bgCanvas.style.height = h + 'px';
+  if (bgGl) {
+    bgGl.viewport(0, 0, bgCanvas.width, bgCanvas.height);
+    drawBg();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  INIT UI
+// ═══════════════════════════════════════════════════════
+function initFoldPicker() {
+  const picker = document.getElementById('fold-picker');
+  picker.innerHTML = '';
+  [3,4,5,6,7,8,10,12].forEach(n => {
+    const b = document.createElement('button');
+    b.className = 'fold-btn' + (n === state.folds ? ' active' : '');
+    b.textContent = n;
+    b.onclick = () => {
+      state.folds = n;
+      state.cuts = [];
+      state.currentCut = null;
+      picker.querySelectorAll('.fold-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      drawStudio();
+    };
+    picker.appendChild(b);
+  });
+}
+
+function initColorPicker() {
+  const picker = document.getElementById('color-picker');
+  picker.innerHTML = '';
+  COLORS.forEach((c, i) => {
+    const s = document.createElement('div');
+    s.className = 'color-swatch' + (i === 0 ? ' active' : '');
+    s.style.background = c.fill;
+    s.style.boxShadow = `inset 0 0 0 2px ${c.stroke}`;
+    s.onclick = () => {
+      state.currentColor = c;
+      picker.querySelectorAll('.color-swatch').forEach(x => x.classList.remove('active'));
+      s.classList.add('active');
+    };
+    picker.appendChild(s);
+  });
+}
+
+function initToolBtns() {
+  document.querySelectorAll('.tool-btn').forEach(b => {
+    b.onclick = () => {
+      state.tool = b.dataset.tool;
+      document.querySelectorAll('.tool-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    };
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  STUDIO CANVAS — coordinate helpers
+// ═══════════════════════════════════════════════════════
+const CSIZE = 400;
+// The folded triangle: apex at center top, base at bottom
+// We draw a pie-slice from the center of the canvas
+// mapping to a "unit triangle" for cutting
+
+function getTrianglePoints(folds) {
+  const cx = CSIZE / 2, cy = CSIZE / 2;
+  const R = CSIZE * 0.44;
+  const half = Math.PI / folds;
+  // apex = center, two base corners
+  return {
+    cx, cy, R, half,
+    p0: { x: cx, y: cy },
+    p1: { x: cx + R * Math.sin(-half), y: cy - R * Math.cos(half) },
+    p2: { x: cx + R * Math.sin(half),  y: cy - R * Math.cos(half) },
+    // actually use polar for the wedge
+  };
+}
+
+function canvasToWedge(x, y) {
+  const cx = CSIZE/2, cy = CSIZE/2;
+  const dx = x - cx, dy = -(y - cy);
+  const angle = Math.atan2(dx, dy);  // angle from top (12 o'clock)
+  const r = Math.sqrt(dx*dx + dy*dy);
+  return { angle, r };
+}
+
+function wedgeToCanvas(angle, r) {
+  const cx = CSIZE/2, cy = CSIZE/2;
+  return {
+    x: cx + r * Math.sin(angle),
+    y: cy - r * Math.cos(angle)
+  };
+}
+
+function isInsideWedge(x, y, folds) {
+  const { angle, r } = canvasToWedge(x, y);
+  const R = CSIZE * 0.44;
+  const half = Math.PI / folds;
+  return r <= R && Math.abs(angle) <= half;
+}
+
+// ═══════════════════════════════════════════════════════
+//  DRAW STUDIO
+// ═══════════════════════════════════════════════════════
+function drawStudio() {
+  const ctx = cutCtx;
+  ctx.clearRect(0, 0, CSIZE, CSIZE);
+
+  const cx = CSIZE/2, cy = CSIZE/2;
+  const R = CSIZE * 0.44;
+  const folds = state.folds;
+  const half = Math.PI / folds;
+
+  // Background dark fill
+  ctx.fillStyle = '#07111e';
+  ctx.fillRect(0, 0, CSIZE, CSIZE);
+
+  // Draw the wedge — white paper (cut-out style)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, R, -Math.PI/2 - half, -Math.PI/2 + half);
+  ctx.closePath();
+  const paperGrad = ctx.createRadialGradient(cx, cy - R * 0.3, 0, cx, cy, R * 1.2);
+  paperGrad.addColorStop(0, '#ffffff');
+  paperGrad.addColorStop(0.7, '#fcfcfd');
+  paperGrad.addColorStop(1, '#f2f4f8');
+  ctx.fillStyle = paperGrad;
+  ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0.08)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  // Draw fold line (center crease)
+  ctx.strokeStyle = 'rgba(122,184,245,0.25)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 6]);
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  const mid = wedgeToCanvas(0, R);
+  ctx.lineTo(mid.x, mid.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Radial tick marks
+  for (let ri = 0.25; ri <= 1.0; ri += 0.25) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * ri, -Math.PI/2 - half, -Math.PI/2 + half);
+    ctx.strokeStyle = 'rgba(122,184,245,0.08)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Draw completed cuts
+  state.cuts.forEach(cut => drawCut(ctx, cut, false));
+
+  // Draw current in-progress cut
+  if (state.currentCut) drawCut(ctx, state.currentCut, true);
+}
+
+function drawCut(ctx, cut, isLive) {
+  ctx.save();
+  // Cut line: dark on white paper (like pencil line to cut along)
+  ctx.strokeStyle = isLive ? 'rgba(0,0,0,0.7)' : 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = isLive ? 2.5 : 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  if (cut.type === 'path') {
+    if (cut.points.length < 2) { ctx.restore(); return; }
+    ctx.beginPath();
+    ctx.moveTo(cut.points[0].x, cut.points[0].y);
+    for (let i = 1; i < cut.points.length; i++) {
+      ctx.lineTo(cut.points[i].x, cut.points[i].y);
+    }
+    ctx.stroke();
+  } else if (cut.type === 'line') {
+    if (!cut.start || !cut.end) { ctx.restore(); return; }
+    ctx.beginPath();
+    ctx.moveTo(cut.start.x, cut.start.y);
+    ctx.lineTo(cut.end.x, cut.end.y);
+    ctx.stroke();
+  } else if (cut.type === 'circle') {
+    if (!cut.center || !cut.end) { ctx.restore(); return; }
+    const r = Math.hypot(cut.end.x - cut.center.x, cut.end.y - cut.center.y);
+    ctx.beginPath();
+    ctx.arc(cut.center.x, cut.center.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+//  CUT CANVAS EVENTS
+// ═══════════════════════════════════════════════════════
+function getCanvasPos(e) {
+  const rect = cutCanvas.getBoundingClientRect();
+  const scaleX = CSIZE / rect.width;
+  const scaleY = CSIZE / rect.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+cutCanvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  state.isDrawing = true;
+
+  if (state.tool === 'path') {
+    state.currentCut = { type: 'path', points: [pos] };
+  } else if (state.tool === 'line') {
+    state.currentCut = { type: 'line', start: pos, end: pos };
+  } else if (state.tool === 'circle') {
+    state.currentCut = { type: 'circle', center: pos, end: pos };
+  }
+  drawStudio();
+});
+
+cutCanvas.addEventListener('pointermove', e => {
+  e.preventDefault();
+  if (!state.isDrawing || !state.currentCut) return;
+  const pos = getCanvasPos(e);
+
+  if (state.tool === 'path') {
+    const pts = state.currentCut.points;
+    const last = pts[pts.length - 1];
+    if (Math.hypot(pos.x - last.x, pos.y - last.y) > 2) {
+      pts.push(pos);
+    }
+  } else if (state.tool === 'line') {
+    state.currentCut.end = pos;
+  } else if (state.tool === 'circle') {
+    state.currentCut.end = pos;
+  }
+  drawStudio();
+});
+
+cutCanvas.addEventListener('pointerup', e => {
+  if (!state.isDrawing) return;
+  state.isDrawing = false;
+  if (state.currentCut) {
+    // Only save if it has some size
+    let valid = false;
+    if (state.currentCut.type === 'path' && state.currentCut.points.length >= 3) valid = true;
+    if (state.currentCut.type === 'line' && state.currentCut.start && state.currentCut.end) {
+      const d = Math.hypot(state.currentCut.end.x - state.currentCut.start.x, state.currentCut.end.y - state.currentCut.start.y);
+      if (d > 5) valid = true;
+    }
+    if (state.currentCut.type === 'circle' && state.currentCut.center && state.currentCut.end) {
+      const r = Math.hypot(state.currentCut.end.x - state.currentCut.center.x, state.currentCut.end.y - state.currentCut.center.y);
+      if (r > 5) valid = true;
+    }
+    if (valid) state.cuts.push(state.currentCut);
+    state.currentCut = null;
+  }
+  drawStudio();
+});
+
+cutCanvas.addEventListener('pointerleave', () => {
+  if (state.isDrawing && state.currentCut) {
+    if (state.currentCut.type === 'path' && state.currentCut.points.length >= 3) {
+      state.cuts.push(state.currentCut);
+    }
+    state.currentCut = null;
+    state.isDrawing = false;
+    drawStudio();
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  SNOWFLAKE GENERATION (wedge → SVG paths)
+// ═══════════════════════════════════════════════════════
+function generateSnowflakeSVG(cuts, folds, color) {
+  const R = CSIZE * 0.44;
+  const cx = CSIZE/2, cy = CSIZE/2;
+
+  // Convert a canvas point to normalized unit coords relative to wedge
+  // We'll output paths in a -1..1 SVG coordinate space
+  function canvasToSVG(px, py) {
+    const dx = px - cx, dy = py - cy;
+    return { x: dx / R, y: dy / R };
+  }
+
+  // Build paths for one wedge, mirrored, then rotated for each fold
+  const allPaths = [];
+
+  function cutsToSVGPaths(cutsArr, reflect) {
+    const paths = [];
+    cutsArr.forEach(cut => {
+      if (cut.type === 'path' && cut.points.length >= 2) {
+        const pts = cut.points.map(p => {
+          const s = canvasToSVG(p.x, p.y);
+          return reflect ? { x: -s.x, y: s.y } : s;
+        });
+        let d = `M ${pts[0].x.toFixed(4)} ${pts[0].y.toFixed(4)}`;
+        for (let i = 1; i < pts.length; i++) {
+          d += ` L ${pts[i].x.toFixed(4)} ${pts[i].y.toFixed(4)}`;
+        }
+        paths.push(d);
+      } else if (cut.type === 'line' && cut.start && cut.end) {
+        const s = canvasToSVG(cut.start.x, cut.start.y);
+        const e = canvasToSVG(cut.end.x, cut.end.y);
+        const sx = reflect ? -s.x : s.x, ex = reflect ? -e.x : e.x;
+        paths.push(`M ${sx.toFixed(4)} ${s.y.toFixed(4)} L ${ex.toFixed(4)} ${e.y.toFixed(4)}`);
+      } else if (cut.type === 'circle' && cut.center && cut.end) {
+        const ctr = canvasToSVG(cut.center.x, cut.center.y);
+        const r = Math.hypot(cut.end.x - cut.center.x, cut.end.y - cut.center.y) / R;
+        const cx2 = reflect ? -ctr.x : ctr.x;
+        // Approximate circle with arc path
+        paths.push(`M ${(cx2-r).toFixed(4)} ${ctr.y.toFixed(4)} a ${r.toFixed(4)} ${r.toFixed(4)} 0 1 0 ${(2*r).toFixed(4)} 0 a ${r.toFixed(4)} ${r.toFixed(4)} 0 1 0 ${(-2*r).toFixed(4)} 0`);
+      }
+    });
+    return paths;
+  }
+
+  // Generate one wedge + its mirror, then rotate for all folds
+  const basePaths  = cutsToSVGPaths(cuts, false);
+  const mirrorPaths = cutsToSVGPaths(cuts, true);
+
+  // Build SVG elements with rotation transforms
+  const svgParts = [];
+  for (let i = 0; i < folds; i++) {
+    const angle = (360 / folds) * i;
+    const combined = [...basePaths, ...mirrorPaths];
+    combined.forEach(d => {
+      svgParts.push(`<path transform="rotate(${angle})" d="${d}" />`);
+    });
+  }
+
+  // Build the background filled snowflake shape (wedge polygon filled, rotated)
+  const bgParts = [];
+  const half = Math.PI / folds;
+  // Build a single wedge path in SVG coords
+  const wedgePoints = [];
+  wedgePoints.push('0 0');
+  const steps = 32;
+  for (let s = 0; s <= steps; s++) {
+    const a = -half + (2 * half * s / steps);
+    const nx = Math.sin(a), ny = -Math.cos(a);
+    wedgePoints.push(`${nx.toFixed(4)} ${ny.toFixed(4)}`);
+  }
+  const wedgePath = `M 0 0 L ${wedgePoints.slice(1).join(' L ')} Z`;
+
+  for (let i = 0; i < folds; i++) {
+    const angle = (360 / folds) * i;
+    bgParts.push(`<path transform="rotate(${angle})" d="${wedgePath}" />`);
+  }
+
+  return { svgParts, bgParts, half };
+}
+
+function buildSVGElement(cuts, folds, color) {
+  const { svgParts, bgParts } = generateSnowflakeSVG(cuts, folds, color);
+
+  previewSvg.setAttribute('viewBox', '-1.05 -1.05 2.1 2.1');
+  previewSvg.innerHTML = `
+    <g fill="${color.fill}" stroke="none">
+      ${bgParts.join('\n')}
+    </g>
+    <g fill="none" stroke="${color.stroke}" stroke-width="0.018" stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+      ${svgParts.join('\n')}
+    </g>
+  `;
+}
+
+function buildSVGString(cuts, folds, color) {
+  const { svgParts, bgParts } = generateSnowflakeSVG(cuts, folds, color);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1.05 -1.05 2.1 2.1" width="500" height="500">
+  <g fill="${color.fill}" stroke="none">
+    ${bgParts.join('\n    ')}
+  </g>
+  <g fill="none" stroke="${color.stroke}" stroke-width="0.018" stroke-linecap="round" stroke-linejoin="round">
+    ${svgParts.join('\n    ')}
+  </g>
+</svg>`;
+}
+
+// ═══════════════════════════════════════════════════════
+//  WALL ANIMATION
+// ═══════════════════════════════════════════════════════
+class WallFlake {
+  constructor(svgData, color) {
+    this.svgData = svgData; // { bgParts, svgParts }
+    this.color = color;
+    this.size = 40 + Math.random() * 80;
+    this.x = Math.random() * window.innerWidth;
+    this.y = -this.size - Math.random() * window.innerHeight;
+    this.speed = 0.3 + Math.random() * 0.8;
+    this.drift = (Math.random() - 0.5) * 0.3;
+    this.rot = Math.random() * Math.PI * 2;
+    this.rotSpeed = (Math.random() - 0.5) * 0.008;
+    this.alpha = 0.4 + Math.random() * 0.6;
+    this.img = null;
+    this._buildImage();
+  }
+
+  _buildImage() {
+    const sz = Math.ceil(this.size * 2.2);
+    const strokeHex = this.color.stroke.startsWith('rgba') ? '#e0e0e0' : this.color.stroke;
+    const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1.05 -1.05 2.1 2.1" width="${sz}" height="${sz}">
+      <g fill="${this.color.fill}" stroke="none">${(this.svgData.bgParts || []).join('')}</g>
+      <g fill="none" stroke="${strokeHex}" stroke-width="0.022" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">${(this.svgData.svgParts || []).join('')}</g>
+    </svg>`;
+    const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    this.img = new Image();
+    this.img.onload = () => { URL.revokeObjectURL(url); };
+    this.img.src = url;
+  }
+
+  update(h) {
+    this.y += this.speed;
+    this.x += this.drift;
+    this.rot += this.rotSpeed;
+    if (this.y > h + this.size) {
+      this.y = -this.size * 2;
+      this.x = Math.random() * window.innerWidth;
+    }
+  }
+
+  draw(ctx) {
+    if (!this.img || !this.img.complete) return;
+    const sz = Math.ceil(this.size * 2.2);
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.drawImage(this.img, -sz/2, -sz/2, sz, sz);
+    ctx.restore();
+  }
+}
+
+function resizeWall() {
+  wallCanvas.width = window.innerWidth;
+  wallCanvas.height = window.innerHeight;
+}
+
+function wallLoop() {
+  const w = wallCanvas.width, h = wallCanvas.height;
+  drawBg();
+  wallCtx.clearRect(0, 0, w, h);
+
+  state.snowflakes.forEach(f => {
+    f.update(h);
+    f.draw(wallCtx);
+  });
+
+  state.animId = requestAnimationFrame(wallLoop);
+}
+
+// ═══════════════════════════════════════════════════════
+//  SCREEN NAVIGATION
+// ═══════════════════════════════════════════════════════
+function showWall() {
+  studioScreen.classList.add('hidden');
+  studioScreen.classList.remove('visible');
+  studioScreen.setAttribute('aria-hidden', 'true');
+  unfoldOverlay.classList.remove('visible');
+  if (!state.animId) wallLoop();
+}
+
+function showStudio() {
+  studioScreen.classList.remove('hidden');
+  studioScreen.classList.add('visible');
+  studioScreen.setAttribute('aria-hidden', 'false');
+  // Reset cuts when opening
+  state.cuts = [];
+  state.currentCut = null;
+  state.isDrawing = false;
+  drawStudio();
+}
+
+// ═══════════════════════════════════════════════════════
+//  BUTTON WIRING
+// ═══════════════════════════════════════════════════════
+document.getElementById('open-studio-btn').onclick = showStudio;
+document.getElementById('back-btn').onclick = showWall;
+document.getElementById('studio-backdrop').onclick = showWall;
+
+document.getElementById('unfold-btn').onclick = () => {
+  const { svgParts, bgParts } = generateSnowflakeSVG(state.cuts, state.folds, state.currentColor);
+  state.pendingFlakeData = { svgParts, bgParts };
+  buildSVGElement(state.cuts, state.folds, state.currentColor);
+  unfoldOverlay.classList.add('visible');
+};
+
+document.getElementById('clear-btn').onclick = () => {
+  state.cuts = [];
+  state.currentCut = null;
+  drawStudio();
+};
+
+document.getElementById('add-wall-btn').onclick = () => {
+  const data = state.pendingFlakeData;
+  if (data && data.bgParts && data.svgParts) {
+    const flake = new WallFlake(data, state.currentColor);
+    state.snowflakes.push(flake);
+  }
+  unfoldOverlay.classList.remove('visible');
+  showWall();
+};
+
+document.getElementById('save-svg-btn').onclick = () => {
+  const svgStr = buildSVGString(state.cuts, state.folds, state.currentColor);
+  const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `snowflake-${Date.now()}.svg`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+document.getElementById('cut-again-btn').onclick = () => {
+  unfoldOverlay.classList.remove('visible');
+  state.cuts = [];
+  state.currentCut = null;
+  drawStudio();
+};
+
+// ═══════════════════════════════════════════════════════
+//  RESIZE
+// ═══════════════════════════════════════════════════════
+function resizeCutCanvas() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const available = Math.min(vw * 0.55, vh - 100, 480);
+  const sz = Math.max(280, Math.floor(available));
+  cutCanvas.style.width = sz + 'px';
+  cutCanvas.style.height = sz + 'px';
+}
+
+window.addEventListener('resize', () => {
+  resizeWall();
+  resizeBg();
+  resizeCutCanvas();
+});
+
+// ═══════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════
+initFoldPicker();
+initColorPicker();
+initToolBtns();
+resizeWall();
+resizeBg();
+initBgGl();
+resizeCutCanvas();
+drawStudio();
+wallLoop();
+showWall();
+
+// Start with one snowflake on the wall
+(function seedOneFlake() {
+  const pattern = [
+    { type: 'line', start: {x:200, y:200}, end: {x:200, y:140} },
+    { type: 'line', start: {x:200, y:160}, end: {x:185, y:145} },
+    { type: 'line', start: {x:200, y:160}, end: {x:215, y:145} },
+  ];
+  const { svgParts, bgParts } = generateSnowflakeSVG(pattern, 6, COLORS[0]);
+  const flake = new WallFlake({ svgParts, bgParts }, COLORS[0]);
+  flake.y = Math.random() * window.innerHeight * 0.6;
+  state.snowflakes.push(flake);
+})();
+</script>
+</body>
+</html>

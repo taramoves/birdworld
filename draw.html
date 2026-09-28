@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="color-scheme" content="light">
+  <title>Draw a Bird</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script>
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0 !important;
+      padding: 68px 20px 36px !important;
+      min-height: 100vh;
+      background: #fff !important;
+      font-family: 'Nunito', sans-serif;
+      display: flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: flex-start !important;
+      overflow: auto !important;
+      touch-action: manipulation;
+      color-scheme: light;
+      color: #111;
+    }
+    #lang-switch {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 10;
+      display: flex;
+      border: 1.5px solid #111;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #fff;
+    }
+    #lang-switch button {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 700;
+      font-size: 0.8rem;
+      letter-spacing: 0.06em;
+      border: none;
+      background: #fff;
+      color: #111;
+      padding: 8px 14px;
+      cursor: pointer;
+    }
+    #lang-switch button.active {
+      background: #111;
+      color: #fff;
+    }
+    h1 {
+      color: #111;
+      font-size: 1.85rem;
+      font-weight: 700;
+      margin: 0 0 8px 0;
+      letter-spacing: 0.08em;
+      text-align: center;
+    }
+    #page-help {
+      color: #222;
+      font-size: 1.05rem;
+      font-weight: 600;
+      line-height: 1.45;
+      text-align: center;
+      max-width: 640px;
+      margin: 0 0 18px;
+    }
+    #bird-drawer-app {
+      background: #fff;
+      padding: 0;
+      display: inline-block;
+      max-width: calc(100vw - 16px);
+      box-sizing: border-box;
+      forced-color-adjust: none;
+    }
+    #canvas-container { line-height: 0; }
+    #bird-drawer-app canvas {
+      border-radius: 10px;
+      display: block;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+      width: auto !important;
+      height: auto !important;
+      max-width: min(1400px, 100%);
+      max-height: calc(100vh - 380px);
+      aspect-ratio: 1400 / 630;
+    }
+    #palette-area {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    #send-area {
+      display: flex;
+      justify-content: center;
+      margin-top: 14px;
+    }
+    #send-area .send-btn {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 700;
+      font-size: 1.2rem;
+      letter-spacing: 0.08em;
+      padding: 14px 42px;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      background: #111;
+      color: #fff;
+      min-width: 240px;
+      white-space: nowrap;
+    }
+    #send-area .send-btn:hover { background: #333; }
+    #palette-area .color-btn {
+      width: 40px;
+      height: 40px;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      background: none;
+      padding: 0;
+      -webkit-appearance: none;
+      appearance: none;
+      transition: transform 0.15s ease;
+      forced-color-adjust: none;
+    }
+    #palette-area .color-btn:hover { transform: scale(1.15); }
+    #palette-area .color-btn.selected {
+      outline: 3px solid #999;
+      outline-offset: 3px;
+    }
+    #palette-area .color-btn svg { display: block; forced-color-adjust: none; }
+    #palette-area .action-btn {
+      font-family: 'Nunito', sans-serif;
+      font-weight: 600;
+      font-size: 0.9rem;
+      padding: 9px 20px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      background: #111;
+      color: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+      transition: background 0.12s ease;
+    }
+    #palette-area .action-btn:hover {
+      background: #333;
+    }
+  </style>
+</head>
+<body>
+  <div id="lang-switch">
+    <button type="button" id="lang-en" class="active">EN</button>
+    <button type="button" id="lang-fr">FR</button>
+  </div>
+  <h1 id="page-title">DRAW A BIRD</h1>
+  <p id="page-help">Draw in center for body, draw on side for wing (drawing will mirror).</p>
+  <div id="bird-drawer-app">
+    <div id="canvas-container"></div>
+    <div id="palette-area"></div>
+    <div id="send-area"></div>
+    <p style="text-align:center;font-size:0.7rem;color:#888;margin:12px 0 0;letter-spacing:0.03em;">by @taramoves</p>
+  </div>
+<script>
+
+let bodyStrokes = [];
+let wingStrokes = [];
+let strokeHistory = []; // 'body' or 'wing' per stroke, for undo
+let currentStroke = null;
+
+let currentColor = "#000000";
+const currentSize = 16;
+
+// Black and white, plus 3 of these 5. OKLCH mapped into sRGB:
+// oklch(0.66 0.28 10.04) → #ff3571
+// oklch(0.73 0.23 46.84) → #ff7d33
+// oklch(0.88 0.21 93.58) → #ffd30f
+// oklch(0.77 0.18 178.6) → #00d1b5
+// oklch(0.63 0.16 226.42) → #0097c1
+const PALETTE = ["#ff3571", "#ff7d33", "#ffd30f", "#00d1b5", "#0097c1"];
+const COLORS = ["#000000", "#ffffff", "#ff3571", "#ff7d33", "#ffd30f"];
+
+const STRINGS = {
+  en: {
+    title: "DRAW A BIRD",
+    help: "Draw in center for body, draw on side for wing (drawing will mirror).",
+    wing: "WING",
+    body: "BODY",
+    undo: "Undo",
+    clear: "Clear",
+    send: "SEND BIRD",
+    sent: "Sent ✓",
+  },
+  fr: {
+    title: "DESSINE UN OISEAU",
+    help: "Dessine au centre pour le corps, dessine sur le côté pour l'aile (le dessin sera en miroir).",
+    wing: "AILE",
+    body: "CORPS",
+    undo: "Annuler",
+    clear: "Effacer",
+    send: "ENVOYER L'OISEAU",
+    sent: "Envoyé ✓",
+  },
+};
+
+let lang = "en";
+let colorBtns = [];
+let undoBtn;
+let clearBtn;
+let saveBtn;
+let showingSent = false;
+
+// Body stays 200px wide. Each wing column is 600px (was 300).
+// Saved x is shifted so the body center is still 400, matching older birds.
+const CANVAS_W = 1400;
+const CANVAS_H = 630;
+const CENTER_X = CANVAS_W / 2;
+const BODY_LEFT = CENTER_X - 100;
+const BODY_RIGHT = CENTER_X + 100;
+const COORD_SHIFT = CENTER_X - 400;
+
+function setup() {
+  let canvas = createCanvas(CANVAS_W, CANVAS_H);
+  canvas.parent('canvas-container');
+  canvas.elt.style.height = 'auto';
+  canvas.elt.style.touchAction = 'none';
+  // Prevent scroll during drawing on the canvas only — NOT the whole document
+  canvas.elt.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  canvas.elt.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
+}
+
+function draw() {
+  background(168);
+
+  drawZones();
+  drawGuides();
+  drawAnchorPoints();
+  drawAllStrokes();
+  drawEyes();
+
+  if (mouseIsPressed && currentStroke) {
+    currentStroke.points.push({ x: mouseX, y: mouseY });
+  }
+}
+
+function drawZones() {
+  stroke(140, 135, 150);
+  strokeWeight(1);
+  drawingContext.setLineDash([8, 6]);
+
+  line(BODY_LEFT, 0, BODY_LEFT, CANVAS_H);
+  line(BODY_RIGHT, 0, BODY_RIGHT, CANVAS_H);
+
+  drawingContext.setLineDash([]);
+
+  const t = STRINGS[lang];
+  noStroke();
+  fill(55);
+  textSize(16);
+  textAlign(CENTER, TOP);
+  textFont('Nunito');
+  textStyle(BOLD);
+  text(t.wing, BODY_LEFT / 2, 14);
+  text(t.body, CENTER_X, 14);
+  text(t.wing, BODY_RIGHT + BODY_LEFT / 2, 14);
+  textStyle(NORMAL);
+}
+
+function drawGuides() {
+  stroke(140, 135, 155);
+  strokeWeight(1);
+  noFill();
+  drawingContext.setLineDash([4, 5]);
+
+  const ox = COORD_SHIFT;
+
+  // Body oval (vertical — top-down view)
+  ellipse(400 + ox, 325, 200, 220);
+
+  // Head circle (above body)
+  ellipse(400 + ox, 190, 85, 85);
+
+  // Beak (triangle pointing up)
+  beginShape();
+  vertex(391 + ox, 153);
+  vertex(409 + ox, 153);
+  vertex(400 + ox, 120);
+  endShape(CLOSE);
+
+  // Tail (upside-down triangle — wide at bottom, apex toward body)
+  beginShape();
+  vertex(400 + ox, 438);
+  vertex(332 + ox, 516);
+  vertex(468 + ox, 516);
+  endShape(CLOSE);
+
+  // Wing ovals fill the wider side columns
+  ellipse(BODY_LEFT / 2, 325, BODY_LEFT, 132);
+  ellipse(BODY_RIGHT + BODY_LEFT / 2, 325, BODY_LEFT, 132);
+
+  drawingContext.setLineDash([]);
+}
+
+function drawAnchorPoints() {
+  fill(130, 120, 140);
+  noStroke();
+  circle(BODY_LEFT, 315, 7);
+  circle(BODY_RIGHT, 315, 7);
+}
+
+function drawEyes() {
+  fill(0);
+  noStroke();
+  ellipse(377 + COORD_SHIFT, 183, 16, 22);
+  ellipse(423 + COORD_SHIFT, 183, 16, 22);
+}
+
+function fillStrokeShape(strokeObj) {
+  const pts = strokeObj._smoothed;
+  if (!pts || pts.length < 4) return; // only completed strokes with enough points
+
+  const hex = strokeObj.color.replace('#', '');
+  const cr = parseInt(hex.substring(0, 2), 16);
+  const cg = parseInt(hex.substring(2, 4), 16);
+  const cb = parseInt(hex.substring(4, 6), 16);
+
+  let minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const radius = Math.sqrt((maxX - minX) ** 2 + (maxY - minY) ** 2) * 0.6;
+  if (radius < 1) return;
+
+  const grad = drawingContext.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  grad.addColorStop(0, `rgba(${cr},${cg},${cb},0.28)`);
+  grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+
+  drawingContext.save();
+  drawingContext.fillStyle = grad;
+  drawingContext.beginPath();
+  drawingContext.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) drawingContext.lineTo(pts[i].x, pts[i].y);
+  drawingContext.closePath();
+  drawingContext.fill();
+  drawingContext.restore();
+}
+
+function drawAllStrokes() {
+  noFill();
+
+  // Fill pass first (under strokes) — only completed strokes have _smoothed
+  bodyStrokes.forEach(s => fillStrokeShape(s));
+  wingStrokes.forEach(s => {
+    fillStrokeShape(s);
+    push(); scale(-1, 1); translate(-CANVAS_W, 0); fillStrokeShape(s); pop();
+  });
+
+  // Stroke pass on top
+  bodyStrokes.forEach(s => drawStroke(s));
+  wingStrokes.forEach(s => {
+    drawStroke(s);
+    push(); scale(-1, 1); translate(-CANVAS_W, 0); drawStroke(s); pop();
+  });
+
+  if (currentStroke) drawStroke(currentStroke);
+}
+
+function blendWithWhite(hex, amount) {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.substring(0, 2), 16);
+  const g = parseInt(c.substring(2, 4), 16);
+  const b = parseInt(c.substring(4, 6), 16);
+  return [
+    Math.round(r + (255 - r) * amount),
+    Math.round(g + (255 - g) * amount),
+    Math.round(b + (255 - b) * amount),
+  ];
+}
+
+function catmullRomPoints(pts, steps = 8) {
+  if (pts.length < 2) return [...pts];
+  const result = [];
+  const n = pts.length;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(n - 1, i + 2)];
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps, t2 = t * t, t3 = t2 * t;
+      result.push({
+        x: 0.5 * ((2*p1.x) + (-p0.x+p2.x)*t + (2*p0.x-5*p1.x+4*p2.x-p3.x)*t2 + (-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y: 0.5 * ((2*p1.y) + (-p0.y+p2.y)*t + (2*p0.y-5*p1.y+4*p2.y-p3.y)*t2 + (-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+      });
+    }
+  }
+  result.push(pts[n - 1]);
+  return result;
+}
+
+function drawStroke(strokeObj) {
+  const pts = strokeObj._smoothed || catmullRomPoints(strokeObj.points);
+  if (pts.length < 2) return;
+  noFill();
+  strokeCap(ROUND);
+  strokeJoin(ROUND);
+
+  const n = pts.length;
+  for (let i = 0; i < n - 1; i++) {
+    const t = i / Math.max(n - 2, 1);
+    // Taper: thin at ends, full in middle
+    strokeWeight(strokeObj.size * (0.3 + 0.7 * Math.sin(t * Math.PI)));
+    // Gradient: lighter at start, full color at end
+    const [r, g, b] = blendWithWhite(strokeObj.color, 0.42 * (1 - t));
+    stroke(r, g, b);
+    line(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+  }
+}
+
+function mousePressed() {
+  if (mouseX < 0 || mouseX > CANVAS_W || mouseY < 0 || mouseY > CANVAS_H) return;
+
+  if (mouseX < BODY_LEFT || mouseX >= BODY_RIGHT) {
+    currentStroke = {
+      color: currentColor,
+      size: currentSize,
+      points: []
+    };
+    wingStrokes.push(currentStroke);
+    strokeHistory.push('wing');
+  }
+  else {
+    currentStroke = {
+      color: currentColor,
+      size: currentSize,
+      points: []
+    };
+    bodyStrokes.push(currentStroke);
+    strokeHistory.push('body');
+  }
+}
+
+function mouseReleased() {
+  if (currentStroke && currentStroke.points.length >= 2) {
+    currentStroke._smoothed = catmullRomPoints(currentStroke.points);
+  }
+  currentStroke = null;
+}
+
+function keyPressed() {
+  if (key === 's') saveBird();
+  if (key === 'z') undoStroke();
+}
+
+// Ramer-Douglas-Peucker point simplification (iterative, no recursion overflow).
+// Removes points that deviate less than `eps` pixels from the line they fall on.
+function rdp(pts, eps) {
+  if (pts.length <= 2) return pts;
+  const n = pts.length;
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const [s, e] = stack.pop();
+    if (e - s < 2) continue;
+    const x1 = pts[s].x, y1 = pts[s].y, xe = pts[e].x, ye = pts[e].y;
+    const dx = xe - x1, dy = ye - y1, len = Math.sqrt(dx * dx + dy * dy);
+    let maxD = 0, mi = s;
+    for (let i = s + 1; i < e; i++) {
+      const d = len > 0
+        ? Math.abs(dy * pts[i].x - dx * pts[i].y + xe * y1 - ye * x1) / len
+        : Math.sqrt((pts[i].x - x1) ** 2 + (pts[i].y - y1) ** 2);
+      if (d > maxD) { maxD = d; mi = i; }
+    }
+    if (maxD > eps) { keep[mi] = 1; stack.push([s, mi], [mi, e]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+function dayKey(ts) {
+  const d = new Date(ts || Date.now());
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + m + '-' + day;
+}
+
+function saveBird() {
+  // Simplify each stroke with RDP (epsilon=2px — invisible at strokeWeight 16)
+  // then store as flat [x1,y1,x2,y2,...] integer array (~10-20x smaller than {x,y} objects).
+  const compress = s => {
+    const simple = s.points.length >= 3 ? rdp(s.points, 2.0) : s.points;
+    return {
+      color: s.color,
+      size:  s.size,
+      points: simple.flatMap(p => [Math.round(p.x - COORD_SHIFT), Math.round(p.y)])
+    };
+  };
+
+  const cBody = bodyStrokes.filter(s => s.points.length >= 2).map(compress);
+  const cWing = wingStrokes.filter(s => s.points.length >= 2).map(compress);
+
+  let density = 0;
+  [...cBody, ...cWing].forEach(s => density += s.points.length / 2);
+
+  const birdData = { bodyStrokes: cBody, wingStrokes: cWing, density, createdAt: Date.now() };
+  const day = dayKey(birdData.createdAt);
+  const newRef = firebase.database().ref('v2/birds').push();
+  const updates = {};
+  updates['v2/birds/' + newRef.key] = birdData;
+  updates['v2/birds_meta/' + newRef.key] = {
+    createdAt: birdData.createdAt,
+    density: birdData.density,
+    starred: false
+  };
+  updates['v2/days/' + day + '/' + newRef.key] = true;
+  updates['v2/stats/count'] = firebase.database.ServerValue.increment(1);
+  updates['v2/stats/days/' + day] = firebase.database.ServerValue.increment(1);
+  firebase.database().ref().update(updates);
+
+  showingSent = true;
+  saveBtn.html(STRINGS[lang].sent);
+  saveBtn.style("background", "#2a7a2a");
+  setTimeout(() => {
+    showingSent = false;
+    saveBtn.html(STRINGS[lang].send);
+    saveBtn.style("background", "#111");
+  }, 1800);
+
+  clearDrawing();
+  pickNewColors();
+}
+
+function undoStroke() {
+  if (strokeHistory.length === 0) return;
+  const last = strokeHistory.pop();
+  if (last === 'body') bodyStrokes.pop();
+  else wingStrokes.pop();
+}
+
+function clearDrawing() {
+  bodyStrokes = [];
+  wingStrokes = [];
+  strokeHistory = [];
+  currentStroke = null;
+}
+
+function pickNewColors() {
+  const shuffled = [...PALETTE].sort(() => Math.random() - 0.5);
+  const newPick = ["#000000", "#ffffff", ...shuffled.slice(0, 3)];
+  newPick.forEach((c, i) => {
+    COLORS[i] = c;
+    const circle = colorBtns[i] && colorBtns[i].elt.querySelector('circle');
+    if (circle) circle.setAttribute('fill', c);
+  });
+  currentColor = "#000000";
+  colorBtns.forEach(b => b.removeClass('selected'));
+  if (colorBtns[0]) colorBtns[0].addClass('selected');
+}
+
+function applyLanguage() {
+  const t = STRINGS[lang];
+  document.documentElement.lang = lang;
+  document.getElementById('page-title').textContent = t.title;
+  document.getElementById('page-help').textContent = t.help;
+  document.getElementById('lang-en').classList.toggle('active', lang === 'en');
+  document.getElementById('lang-fr').classList.toggle('active', lang === 'fr');
+  if (undoBtn) undoBtn.html(t.undo);
+  if (clearBtn) clearBtn.html(t.clear);
+  if (saveBtn) saveBtn.html(showingSent ? t.sent : t.send);
+}
+
+function colorSwatch(hex) {
+  // SVG fill is immune to browser auto-darkening and forced-colors mode
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" style="forced-color-adjust:none"><circle cx="20" cy="20" r="17" fill="${hex}" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"/></svg>`;
+}
+
+function createPalette() {
+  let palette = select('#palette-area');
+
+  COLORS.forEach((c, i) => {
+    let btn = createButton("");
+    btn.parent(palette);
+    btn.addClass('color-btn');
+    btn.elt.innerHTML = colorSwatch(c);
+    btn.mousePressed(() => {
+      currentColor = COLORS[i];
+      colorBtns.forEach(b => b.removeClass('selected'));
+      btn.addClass('selected');
+    });
+    colorBtns.push(btn);
+  });
+  colorBtns[0].addClass('selected'); // default: black
+
+  undoBtn = createButton(STRINGS.en.undo);
+  undoBtn.parent(palette);
+  undoBtn.addClass('action-btn');
+  undoBtn.mousePressed(undoStroke);
+
+  clearBtn = createButton(STRINGS.en.clear);
+  clearBtn.parent(palette);
+  clearBtn.addClass('action-btn');
+  clearBtn.mousePressed(clearDrawing);
+
+  saveBtn = createButton(STRINGS.en.send);
+  saveBtn.parent(select('#send-area'));
+  saveBtn.addClass('send-btn');
+  saveBtn.mousePressed(saveBird);
+}
+
+window.onload = () => {
+  pickNewColors();
+  createPalette();
+  document.getElementById('lang-en').addEventListener('click', () => {
+    lang = 'en';
+    applyLanguage();
+  });
+  document.getElementById('lang-fr').addEventListener('click', () => {
+    lang = 'fr';
+    applyLanguage();
+  });
+};
+
+</script>
+</body>
+</html>

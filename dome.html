@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bird Dome</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #dome-container canvas { display: block; }
+  </style>
+</head>
+<body>
+<div id="dome-container"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  firebase.initializeApp(window.FIREBASE_CONFIG);
+</script>
+
+<script type="importmap">{ "imports": { "three": "https://cdn.skypack.dev/three@0.132.2" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ── Bird buffer constants (identical to index.html) ──────────────────────────
+const BODY_BUF_W = 220, BODY_BUF_H = 650, BODY_OX = 110, BODY_OY = 325;
+const WING_W = 720,     WING_H = 650,     WING_OX = 710, WING_OY = 325;
+
+// ── Sprite settings ──────────────────────────────────────────────────────────
+const SPRITE_S = 512;   // sprite canvas side length (px); was 320 so longer wings fit
+const DRAW_S   = 0.32;  // bird scale within the sprite canvas
+const SPRITE_WORLD = 4.5 * (SPRITE_S / 320); // keep body size when the sprite canvas grows
+const N_FRAMES = 8;     // pre-baked flap animation frames
+const MAX_BIRDS = 30;   // fallback when admin hasn't set a limit
+
+// Background color palettes matching admin's five options.
+// Each has three land colors and three sky colors (dark → light),
+// blended by the FBM noise value in the shader.
+const BG_PALETTES = {
+  hills: { land: [[0.12,0.30,0.08],[0.32,0.60,0.12],[0.58,0.80,0.22]], sky: [[0.25,0.45,0.75],[0.45,0.65,0.90],[0.70,0.85,1.00]] },
+  snow:  { land: [[0.60,0.70,0.80],[0.80,0.87,0.93],[0.93,0.96,1.00]], sky: [[0.55,0.65,0.80],[0.70,0.80,0.92],[0.87,0.92,1.00]] },
+  sky:   { land: [[0.25,0.50,0.85],[0.40,0.62,0.90],[0.60,0.78,0.96]], sky: [[0.35,0.58,0.92],[0.55,0.72,0.97],[0.80,0.90,1.00]] },
+  dusk:  { land: [[0.12,0.04,0.02],[0.30,0.10,0.04],[0.50,0.22,0.08]], sky: [[0.42,0.18,0.08],[0.68,0.38,0.12],[0.88,0.60,0.18]] },
+  night: { land: [[0.02,0.02,0.06],[0.03,0.04,0.10],[0.05,0.07,0.16]], sky: [[0.03,0.04,0.10],[0.05,0.07,0.16],[0.08,0.11,0.24]] },
+};
+
+// ── Point decode + smooth helpers (same logic as index.html) ─────────────────
+
+// Handles both legacy [{x,y},...] and compact [x1,y1,x2,y2,...] formats.
+function decodePoints(pts) {
+  if (!pts || pts.length === 0) return [];
+  if (typeof pts[0] === 'number') {
+    const r = [];
+    for (let i = 0; i + 1 < pts.length; i += 2) r.push({ x: pts[i], y: pts[i + 1] });
+    return r;
+  }
+  return pts;
+}
+
+function catmullRomPoints(pts, steps = 8) {
+  if (pts.length < 2) return [...pts];
+  const result = [], n = pts.length;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i];
+    const p2 = pts[i + 1], p3 = pts[Math.min(n - 1, i + 2)];
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps, t2 = t * t, t3 = t2 * t;
+      result.push({
+        x: 0.5 * ((2*p1.x) + (-p0.x+p2.x)*t + (2*p0.x-5*p1.x+4*p2.x-p3.x)*t2 + (-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y: 0.5 * ((2*p1.y) + (-p0.y+p2.y)*t + (2*p0.y-5*p1.y+4*p2.y-p3.y)*t2 + (-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+      });
+    }
+  }
+  result.push(pts[n - 1]);
+  return result;
+}
+
+// ── Bird rendering (Canvas 2D API, mirrors index.html p5.js logic) ───────────
+
+function blendWithWhite(hex, t) {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0,2), 16), g = parseInt(c.slice(2,4), 16), b = parseInt(c.slice(4,6), 16);
+  return [Math.round(r+(255-r)*t), Math.round(g+(255-g)*t), Math.round(b+(255-b)*t)];
+}
+
+function fillShape(ctx, pts, color) {
+  if (pts.length < 4) return;
+  const c = color.replace('#','');
+  const cr=parseInt(c.slice(0,2),16), cg=parseInt(c.slice(2,4),16), cb=parseInt(c.slice(4,6),16);
+  let x0=pts[0].x, x1=x0, y0=pts[0].y, y1=y0;
+  for (const p of pts) { if(p.x<x0)x0=p.x; if(p.x>x1)x1=p.x; if(p.y<y0)y0=p.y; if(p.y>y1)y1=p.y; }
+  const mx=(x0+x1)/2, my=(y0+y1)/2;
+  const rad = Math.sqrt((x1-x0)**2 + (y1-y0)**2) * 0.6;
+  if (rad < 1) return;
+  const gr = ctx.createRadialGradient(mx,my,0, mx,my,rad);
+  gr.addColorStop(0, `rgba(${cr},${cg},${cb},0.28)`);
+  gr.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+  ctx.save();
+  ctx.fillStyle = gr;
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function makeBodyCanvas(data) {
+  const cv = document.createElement('canvas');
+  cv.width = BODY_BUF_W; cv.height = BODY_BUF_H;
+  const ctx = cv.getContext('2d');
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  data.bodyStrokes.forEach(s => {
+    const raw = decodePoints(s.points);
+    if (raw.length < 2) return;
+    const pts = catmullRomPoints(raw).map(p => ({ x: p.x-400+BODY_OX, y: p.y-315+BODY_OY }));
+    if (pts.length >= 4) fillShape(ctx, pts, s.color);
+    const n = pts.length;
+    for (let i = 0; i < n-1; i++) {
+      const t = i / Math.max(n-2, 1);
+      ctx.lineWidth = s.size * (0.3 + 0.7*Math.sin(t*Math.PI));
+      const [r,g,b] = blendWithWhite(s.color, 0.42*(1-t));
+      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+      ctx.beginPath();
+      ctx.moveTo(pts[i].x, pts[i].y);
+      ctx.lineTo(pts[i+1].x, pts[i+1].y);
+      ctx.stroke();
+    }
+  });
+  // eyes
+  ctx.fillStyle = '#000';
+  for (const [ex,ey] of [[BODY_OX-23, BODY_OY-132],[BODY_OX+23, BODY_OY-132]]) {
+    ctx.beginPath(); ctx.ellipse(ex,ey,4,5.5,0,0,Math.PI*2); ctx.fill();
+  }
+  return cv;
+}
+
+function makeWingCanvas(data) {
+  const cv = document.createElement('canvas');
+  cv.width = WING_W; cv.height = WING_H;
+  const ctx = cv.getContext('2d');
+  ctx.lineCap = 'round';
+  data.wingStrokes.forEach(s => {
+    const raw = decodePoints(s.points || []);
+    if (raw.length < 2) return;
+    const pts = catmullRomPoints(raw).map(p => {
+      let x = p.x - 400; if (x > 0) x = -x;
+      return { x: x + WING_OX, y: p.y - 315 + WING_OY };
+    });
+    if (pts.length >= 4) fillShape(ctx, pts, s.color);
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.size;
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  });
+  return cv;
+}
+
+// Pre-bake N_FRAMES composite sprites (body + wings at each flap position).
+// At runtime we just swap material.map — no per-frame canvas drawing needed.
+function bakeFrames(bodyCV, wingCV) {
+  return Array.from({ length: N_FRAMES }, (_, i) => {
+    const ws = 0.72 + 0.28 * (Math.cos(i/N_FRAMES * Math.PI*2) * 0.5 + 0.5);
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = SPRITE_S;
+    const ctx = cv.getContext('2d'), h = SPRITE_S/2;
+    ctx.save();
+    ctx.translate(h, h); ctx.scale(DRAW_S, DRAW_S);
+    ctx.save(); ctx.scale( ws, 1); ctx.drawImage(wingCV, -WING_OX, -WING_OY); ctx.restore();
+    ctx.save(); ctx.scale(-ws, 1); ctx.drawImage(wingCV, -WING_OX, -WING_OY); ctx.restore();
+    ctx.drawImage(bodyCV, -BODY_OX, -BODY_OY);
+    ctx.restore();
+    return new THREE.CanvasTexture(cv);
+  });
+}
+
+// ── THREE.js setup ────────────────────────────────────────────────────────────
+
+const container = document.getElementById('dome-container');
+let size = Math.min(window.innerWidth, window.innerHeight);
+
+const scene = new THREE.Scene();
+
+// Background sphere — landscape noise below horizon, sky above.
+// Colors are driven by uniforms so admin's background choice applies live.
+const bgMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  uniforms: {
+    uLand1: { value: new THREE.Vector3(0.12,0.30,0.08) },
+    uLand2: { value: new THREE.Vector3(0.32,0.60,0.12) },
+    uLand3: { value: new THREE.Vector3(0.58,0.80,0.22) },
+    uSky1:  { value: new THREE.Vector3(0.25,0.45,0.75) },
+    uSky2:  { value: new THREE.Vector3(0.45,0.65,0.90) },
+    uSky3:  { value: new THREE.Vector3(0.70,0.85,1.00) },
+  },
+  vertexShader: `
+    varying vec3 vN;
+    void main() {
+      vN = normalize(position);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    #define PI 3.14159265
+    varying vec3 vN;
+    uniform vec3 uLand1, uLand2, uLand3;
+    uniform vec3 uSky1,  uSky2,  uSky3;
+
+    vec2 h2(vec2 p) {
+      p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3)));
+      return -1.0 + 2.0*fract(sin(p)*43758.5453);
+    }
+    float gn(vec2 p) {
+      vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f);
+      return mix(mix(dot(h2(i),           f),           dot(h2(i+vec2(1,0)), f-vec2(1,0)), u.x),
+                 mix(dot(h2(i+vec2(0,1)), f-vec2(0,1)), dot(h2(i+vec2(1,1)), f-vec2(1,1)), u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v=0.0, a=0.52, fr=1.0;
+      for (int i=0; i<3; i++) { v+=gn(p*fr)*a; fr*=2.07; a*=0.46; }
+      return v;
+    }
+    void main() {
+      float y  = vN.y;
+      vec2  uv = vec2(atan(vN.z, vN.x)/(2.0*PI)+0.5, y*0.5+0.5);
+      vec2  q  = vec2(fbm(uv*3.5+vec2(1.7,9.2)), fbm(uv*3.5+vec2(5.2,1.3)));
+      float f  = fbm(uv*4.0 + 1.8*q + vec2(8.3,2.8))*0.5 + 0.5;
+      float fp = (floor(f*5.0) + smoothstep(0.15,0.85,fract(f*5.0))) / 5.0;
+      f = mix(f, fp, 0.6);
+      float s = pow(f, 0.75);
+
+      vec3 land = mix(uLand1, mix(uLand2, uLand3, s), s);
+      vec3 sky  = mix(uSky1,  mix(uSky2,  uSky3,  s), s);
+      gl_FragColor = vec4(mix(land, sky, smoothstep(-0.08, 0.15, y)), 1.0);
+    }
+  `
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(80, 64, 32), bgMat));
+
+function applyBackground(bgId) {
+  const p = BG_PALETTES[bgId] || BG_PALETTES.hills;
+  bgMat.uniforms.uLand1.value.set(...p.land[0]);
+  bgMat.uniforms.uLand2.value.set(...p.land[1]);
+  bgMat.uniforms.uLand3.value.set(...p.land[2]);
+  bgMat.uniforms.uSky1.value.set(...p.sky[0]);
+  bgMat.uniforms.uSky2.value.set(...p.sky[1]);
+  bgMat.uniforms.uSky3.value.set(...p.sky[2]);
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(size, size);
+renderer.setPixelRatio(window.devicePixelRatio); // full native resolution
+container.appendChild(renderer.domElement);
+
+// Cube render target resolution — the quality ceiling of the fisheye projection.
+// Matches the physical pixel count of the output canvas, capped at 2048 for GPU safety.
+function cubeRTSize() {
+  return Math.min(2048, Math.round(size * window.devicePixelRatio));
+}
+
+const cubeRT = new THREE.WebGLCubeRenderTarget(cubeRTSize(), {
+  format: THREE.RGBAFormat,
+  generateMipmaps: true,
+  minFilter: THREE.LinearMipmapLinearFilter
+});
+const cubeCamera = new THREE.CubeCamera(0.1, 200, cubeRT);
+scene.add(cubeCamera);
+
+// Fisheye dome shader.
+// domeFov = 210° so edges just dip below the horizon.
+// The direction transform (x,y,z)→(x,z,-y) rotates the sample direction
+// −90° around X, making the dome centre point to world Y+ (sky/zenith).
+const domeMat = new THREE.ShaderMaterial({
+  uniforms: {
+    envMap:  { value: cubeRT.texture },
+    domeFov: { value: 210.0 }
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform samplerCube envMap;
+    uniform float domeFov;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv = (vUv - 0.5) * 2.0;
+      float r = length(uv);
+      if (r > 1.0) { gl_FragColor = vec4(0.0,0.0,0.0,1.0); return; }
+
+      float theta = r * radians(domeFov) / 2.0;
+      float phi   = atan(uv.y, uv.x);
+      vec3 d = vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta));
+
+      // Rotate sample direction −90° around X so dome centre = world Y+ (sky)
+      vec3 dir = vec3(d.x, d.z, -d.y);
+
+      vec4 col = textureCube(envMap, dir);
+      col.rgb = mix(col.rgb, vec3(0.0), smoothstep(0.93, 1.0, r));
+      gl_FragColor = col;
+    }
+  `
+});
+
+// Render the fisheye onto a full-quad in its own scene
+const domeScene = new THREE.Scene();
+domeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), domeMat));
+const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+// ── Bird3D ────────────────────────────────────────────────────────────────────
+
+// Reusable vectors — avoids GC churn since onBeforeRender fires 6× per bird per frame
+const _bv = {
+  camPos:     new THREE.Vector3(),
+  toCamera:   new THREE.Vector3(),
+  velNorm:    new THREE.Vector3(),
+  velPerp:    new THREE.Vector3(),
+  birdUp:     new THREE.Vector3(),
+  birdRight:  new THREE.Vector3(),
+  birdNormal: new THREE.Vector3(),
+};
+
+class Bird3D {
+  constructor(data) {
+    const bodyCV = makeBodyCanvas(data);
+    const wingCV = makeWingCanvas(data);
+    this.frames = bakeFrames(bodyCV, wingCV);
+
+    this.flapSpeed = 0.0021 + Math.random() * 0.0021;
+    this.phase     = Math.random() * Math.PI * 2;
+    this.sc        = (0.25 + Math.random() * 0.45) * SPRITE_WORLD;
+
+    this.mat = new THREE.MeshBasicMaterial({
+      map: this.frames[0],
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    // Use a plain mesh so onBeforeRender gives us the actual per-face camera,
+    // letting us build a correct billboard + heading matrix for every cube face.
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.mat);
+    this.mesh.matrixAutoUpdate = false; // we own the matrixWorld
+    this.mesh.frustumCulled    = false; // matrixWorld isn't set until onBeforeRender
+
+    // Random position on a sphere shell
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const theta = Math.random() * Math.PI * 2;
+    const r     = 5 + Math.random() * 10;
+    this.pos = new THREE.Vector3(
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.sin(phi) * Math.sin(theta),
+      r * Math.cos(phi)
+    );
+
+    // Random 3-D velocity
+    const sp = 0.04 + Math.random() * 0.05;
+    const vp = Math.acos(2 * Math.random() - 1);
+    const vt = Math.random() * Math.PI * 2;
+    this.vel = new THREE.Vector3(
+      sp * Math.sin(vp) * Math.cos(vt),
+      sp * Math.sin(vp) * Math.sin(vt),
+      sp * Math.cos(vp)
+    );
+
+    // Per-face billboard with velocity-aligned heading.
+    // Called once per cube-camera face (6× per frame), each time with the real camera.
+    // We compute: toCamera = from bird toward camera (billboard normal)
+    //             birdUp   = velocity projected onto the billboard plane (bird faces forward)
+    //             birdRight = cross(birdUp, toCamera)
+    // Then we write the 4×4 world matrix directly so scale, heading, and position are all baked in.
+    const self = this;
+    this.mesh.onBeforeRender = function(renderer, scene, camera) {
+      const v = _bv;
+
+      // Billboard facing direction: from bird toward this face's camera
+      v.camPos.setFromMatrixPosition(camera.matrixWorld);
+      v.toCamera.copy(v.camPos).sub(self.pos).normalize();
+
+      // Project velocity onto the plane facing the camera
+      v.velNorm.copy(self.vel).normalize();
+      const dot = v.velNorm.dot(v.toCamera);
+      v.velPerp.copy(v.velNorm).addScaledVector(v.toCamera, -dot);
+
+      if (v.velPerp.length() > 0.001) {
+        v.birdUp.copy(v.velPerp).normalize();
+      } else {
+        // Velocity is nearly parallel to view ray — pick an arbitrary up
+        v.birdUp.set(0, 1, 0);
+        if (Math.abs(v.birdUp.dot(v.toCamera)) > 0.99) v.birdUp.set(0, 0, 1);
+        v.birdUp.addScaledVector(v.toCamera, -v.birdUp.dot(v.toCamera)).normalize();
+      }
+
+      v.birdRight.crossVectors(v.birdUp, v.toCamera).normalize();
+      v.birdNormal.crossVectors(v.birdRight, v.birdUp); // = toCamera, Gram-Schmidt clean
+
+      const sc = self.sc, p = self.pos;
+      const m  = this.matrixWorld.elements; // column-major
+      m[0]  = v.birdRight.x  * sc;  m[4]  = v.birdUp.x  * sc;  m[8]  = v.birdNormal.x;  m[12] = p.x;
+      m[1]  = v.birdRight.y  * sc;  m[5]  = v.birdUp.y  * sc;  m[9]  = v.birdNormal.y;  m[13] = p.y;
+      m[2]  = v.birdRight.z  * sc;  m[6]  = v.birdUp.z  * sc;  m[10] = v.birdNormal.z;  m[14] = p.z;
+      m[3]  = 0;                     m[7]  = 0;                  m[11] = 0;               m[15] = 1;
+    };
+
+    scene.add(this.mesh);
+  }
+
+  update(t) {
+    this.pos.add(this.vel);
+
+    // Soft spherical boundary — gently pull back beyond radius 16
+    const dist = this.pos.length();
+    if (dist > 16) {
+      this.vel.addScaledVector(this.pos.clone().normalize(), -(dist - 16) * 0.015);
+    }
+
+    // Random wander
+    this.vel.x += (Math.random() - 0.5) * 0.003;
+    this.vel.y += (Math.random() - 0.5) * 0.003;
+    this.vel.z += (Math.random() - 0.5) * 0.003;
+    const sp = this.vel.length();
+    if (sp > 0.09)  this.vel.multiplyScalar(0.09  / sp);
+    if (sp < 0.025) this.vel.multiplyScalar(0.025 / sp);
+
+    // Select pre-baked animation frame
+    const fi = Math.round((t * this.flapSpeed + this.phase) / (Math.PI * 2) * N_FRAMES);
+    this.mat.map = this.frames[((fi % N_FRAMES) + N_FRAMES) % N_FRAMES];
+  }
+}
+
+// ── Firebase: settings-driven bird loading ────────────────────────────────────
+
+const birds = [];
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function dayKey(ts) {
+  const d = new Date(ts || Date.now());
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + m + '-' + day;
+}
+
+async function chooseBirdIds(s, maxN) {
+  if (!s.showOnlyToday && !s.showOnlyFavorites) {
+    const metaSnap = await firebase.database().ref('v2/birds_meta').limitToLast(maxN).once('value');
+    const ids = [];
+    metaSnap.forEach(child => ids.push(child.key));
+    return ids;
+  }
+
+  const dayKeys = [];
+  const starKeys = [];
+  if (s.showOnlyToday) {
+    const snap = await firebase.database().ref('v2/days/' + dayKey()).once('value');
+    snap.forEach(child => dayKeys.push(child.key));
+  }
+  if (s.showOnlyFavorites) {
+    const snap = await firebase.database().ref('v2/starred').once('value');
+    snap.forEach(child => starKeys.push(child.key));
+  }
+
+  let ids;
+  if (s.showOnlyToday && s.showOnlyFavorites) {
+    const stars = new Set(starKeys);
+    ids = dayKeys.filter(key => stars.has(key));
+  } else {
+    ids = s.showOnlyToday ? dayKeys : starKeys;
+  }
+  ids.sort();
+  ids = ids.slice(-Math.max(maxN * 3, maxN));
+  shuffle(ids);
+  return ids.slice(0, maxN);
+}
+
+let _spawnVer = 0;
+function spawnQueue(pool) {
+  const ver = ++_spawnVer;
+  let idx = 0;
+  function addNext() {
+    if (ver !== _spawnVer || idx >= pool.length) return;
+    try { birds.push(new Bird3D(pool[idx])); } catch(e) { console.warn('Bird3D error:', e); }
+    idx++;
+    requestAnimationFrame(addNext);
+  }
+  requestAnimationFrame(addNext);
+}
+
+async function reloadBirds(s) {
+  for (const b of birds) {
+    scene.remove(b.mesh);
+    b.frames.forEach(t => t.dispose());
+    b.mat.dispose();
+  }
+  birds.length = 0;
+
+  const maxN = (s.maxBirds > 0) ? Math.min(s.maxBirds, 60) : MAX_BIRDS;
+  const ids = await chooseBirdIds(s, maxN);
+  const strokeSnaps = await Promise.all(
+    ids.map(key => firebase.database().ref('v2/birds').child(key).once('value'))
+  );
+  const birdData = strokeSnaps.map(snap => snap.val()).filter(v => v && v.bodyStrokes && v.wingStrokes);
+  spawnQueue(birdData);
+}
+
+// Listen for settings changes — background applies immediately, bird list reloads
+// only when the filter settings actually change.
+let _prevFilter = null;
+firebase.database().ref('v2/settings').on('value', snap => {
+  const s = snap.val() || {};
+  applyBackground(s.background || 'hills');
+
+  const filterKey = JSON.stringify([s.showOnlyToday, s.showOnlyFavorites, s.maxBirds]);
+  if (filterKey !== _prevFilter) {
+    _prevFilter = filterKey;
+    reloadBirds(s);
+  }
+});
+
+// ── Animation loop ────────────────────────────────────────────────────────────
+
+function animate(t) {
+  requestAnimationFrame(animate);
+  birds.forEach(b => b.update(t));
+  cubeCamera.update(renderer, scene);
+  renderer.render(domeScene, orthoCamera);
+}
+animate(0);
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+
+window.addEventListener('resize', () => {
+  size = Math.min(window.innerWidth, window.innerHeight);
+  renderer.setSize(size, size);
+  cubeRT.setSize(cubeRTSize(), cubeRTSize());
+});
+</script>
+</body>
+</html>
