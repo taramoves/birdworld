@@ -661,10 +661,10 @@
 
   db.ref('v2/stats/count').on('value', snap => {
     document.getElementById('count-total').textContent = snap.val() || 0;
-  });
+  }, () => {});
   db.ref('v2/stats/days/' + dayKey()).on('value', snap => {
     document.getElementById('count-today').textContent = snap.val() || 0;
-  });
+  }, () => {});
 
   loadMetaPage(null).then(() => {
     document.getElementById('load-bar').classList.add('done');
@@ -717,14 +717,14 @@
       btn.textContent = 'Done ✓';
       setTimeout(() => { btn.textContent = 'Rebuild index'; btn.disabled = false; }, 3000);
     } catch (e) {
-      btn.textContent = 'Error — try again';
+      btn.textContent = 'Rules blocked the new indexes';
       btn.disabled = false;
     }
   };
 
   db.ref('v2/stats/count').once('value', snap => {
     if (!snap.exists()) rebuildIndexes().catch(() => {});
-  });
+  }, () => {});
 
   // ---- Background picker ----
   function buildBgPicker(selected) {

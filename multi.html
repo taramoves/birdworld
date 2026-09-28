@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bird Landscape — Two Squares</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    .panel {
+      position: fixed;
+      overflow: hidden;
+      transform-origin: 0 0;
+      background: #000;
+    }
+    .panel iframe,
+    .panel canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      border: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+    #handles {
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      touch-action: none;
+    }
+    #ui {
+      position: fixed;
+      z-index: 5;
+      top: 14px;
+      left: 14px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-family: Nunito, sans-serif;
+    }
+    #ui button {
+      font: 700 0.82rem Nunito, sans-serif;
+      letter-spacing: 0.06em;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1.5px solid #fff;
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+    }
+    #ui button.active { background: #fff; color: #000; }
+    #ui span { color: #bbb; font-size: 0.78rem; }
+    body.controls-hidden #ui,
+    body.controls-hidden #handles { visibility: hidden; pointer-events: none; }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/9.5.1/math.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/osresearch/p5.projection@0.2.1/library/p5.projection.js"></script>
+</head>
+<body>
+  <div class="panel" id="panel-0"><iframe id="source" src="index.html?mute=1&framed=1"></iframe></div>
+  <div class="panel" id="panel-1"><canvas></canvas></div>
+  <canvas id="handles"></canvas>
+  <div id="ui">
+    <button type="button" id="mode-mask" class="active">MASK</button>
+    <button type="button" id="mode-key">KEYSTONE</button>
+    <button type="button" id="reset-key" hidden>RESET</button>
+    <span>H hides controls</span>
+  </div>
+<script>
+const STORE = 'birdworld-multi-v2';
+const sourceFrame = document.getElementById('source');
+const panels = [document.getElementById('panel-0'), document.getElementById('panel-1')];
+const mirrors = [document.querySelector('#panel-1 canvas')];
+const canvas = document.getElementById('handles');
+const ctx = canvas.getContext('2d');
+
+let mode = 'mask';
+let controls = true;
+let mask = [];
+let keyOff = [];
+let drag = null;
+
+function square(x, y, s) {
+  return [
+    { x: x,     y: y },
+    { x: x + s, y: y },
+    { x: x + s, y: y + s },
+    { x: x,     y: y + s }
+  ];
+}
+
+function defaultLayout() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const s = Math.min(h * 0.84, (w - 72) / 2);
+  const y = (h - s) / 2;
+  const gap = 28;
+  const x = (w - (s * 2 + gap)) / 2;
+  return [square(x, y, s), square(x + s + gap, y, s)];
+}
+
+function zeroOff() {
+  return mask.map(poly => poly.map(() => ({ x: 0, y: 0 })));
+}
+
+function keystonePts() {
+  return mask.map((poly, pi) => poly.map((q, i) => ({
+    x: q.x + keyOff[pi][i].x,
+    y: q.y + keyOff[pi][i].y
+  })));
+}
+
+function loadState() {
+  mask = defaultLayout();
+  keyOff = zeroOff();
+  try {
+    let saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+    if (!saved) {
+      const old = JSON.parse(localStorage.getItem('birdworld-multi-v1') || 'null');
+      if (old && old.mask) saved = { vw: old.vw, vh: old.vh, mode: 'mask', mask: old.mask };
+    }
+    if (!saved || !saved.mask) return;
+    const sx = window.innerWidth / (saved.vw || window.innerWidth);
+    const sy = window.innerHeight / (saved.vh || window.innerHeight);
+    const scale = pts => pts.map(p => ({ x: p.x * sx, y: p.y * sy }));
+    mask = saved.mask.map(scale);
+    keyOff = zeroOff();
+    if (saved.keyOff) {
+      keyOff = saved.keyOff.map(poly => poly.map(p => ({ x: p.x * sx, y: p.y * sy })));
+    }
+    if (saved.mode === 'keystone' || saved.mode === 'mask') mode = saved.mode;
+  } catch (e) {}
+}
+
+function saveState() {
+  const pack = pts => pts.map(p => ({ x: p.x, y: p.y }));
+  localStorage.setItem(STORE, JSON.stringify({
+    vw: window.innerWidth,
+    vh: window.innerHeight,
+    mode,
+    mask: mask.map(pack),
+    keyOff: keyOff.map(pack)
+  }));
+}
+
+function quadToMatrix(src, dst) {
+  const proj = new ProjectionMatrix(
+    [
+      [dst[0].x, dst[0].y],
+      [dst[3].x, dst[3].y],
+      [dst[1].x, dst[1].y],
+      [dst[2].x, dst[2].y]
+    ],
+    [
+      [src[0].x, src[0].y],
+      [src[3].x, src[3].y],
+      [src[1].x, src[1].y],
+      [src[2].x, src[2].y]
+    ]
+  );
+  const m = proj.mat;
+  return 'matrix3d(' + [
+    m[0], m[3], 0, m[6],
+    m[1], m[4], 0, m[7],
+    0, 0, 1, 0,
+    m[2], m[5], 0, m[8]
+  ].join(',') + ')';
+}
+
+let lastBounds = '';
+
+function publishBounds() {
+  const win = sourceFrame.contentWindow;
+  if (!win || !mask.length) return;
+  const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  mask.forEach(poly => poly.forEach(p => {
+    if (p.x < box.minX) box.minX = p.x;
+    if (p.y < box.minY) box.minY = p.y;
+    if (p.x > box.maxX) box.maxX = p.x;
+    if (p.y > box.maxY) box.maxY = p.y;
+  }));
+  const key = [box.minX, box.minY, box.maxX, box.maxY].map(n => Math.round(n)).join(',');
+  if (key === lastBounds) return;
+  lastBounds = key;
+  win.postMessage({ type: 'birdworld-mask', box }, '*');
+}
+
+function applyPanels() {
+  const showWarp = mode === 'keystone' || !controls;
+  panels.forEach((el, i) => {
+    el.style.left = '0px';
+    el.style.top = '0px';
+    el.style.width = '100vw';
+    el.style.height = '100vh';
+    el.style.clipPath = 'polygon(' + mask[i].map(p => p.x + 'px ' + p.y + 'px').join(',') + ')';
+    el.style.transformOrigin = '0 0';
+    if (!showWarp) {
+      el.style.transform = 'none';
+      return;
+    }
+    try {
+      el.style.transform = quadToMatrix(mask[i], keystonePts()[i]);
+    } catch (e) {
+      el.style.transform = 'none';
+    }
+  });
+  publishBounds();
+}
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+function activePts() {
+  return mode === 'mask' ? mask : keystonePts();
+}
+
+function drawHandles() {
+  resizeCanvas();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!controls) return;
+  activePts().forEach((pts, panel) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = panel === 0 ? '#fff' : '#9ad7ff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    pts.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#111';
+      ctx.stroke();
+    });
+  });
+}
+
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function hitCorner(x, y) {
+  const pts = activePts();
+  for (let p = 0; p < pts.length; p++) {
+    for (let i = 0; i < 4; i++) {
+      const q = pts[p][i];
+      if (Math.hypot(q.x - x, q.y - y) <= 16) return { panel: p, index: i, kind: 'corner' };
+    }
+  }
+  return null;
+}
+
+function insidePoly(pts, x, y) {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const pi = pts[i], pj = pts[j];
+    if (((pi.y > y) !== (pj.y > y)) &&
+        (x < (pj.x - pi.x) * (y - pi.y) / ((pj.y - pi.y) || 1e-6) + pi.x)) c = !c;
+  }
+  return c;
+}
+
+function hitInside(x, y) {
+  const pts = activePts();
+  for (let p = pts.length - 1; p >= 0; p--) {
+    if (insidePoly(pts[p], x, y)) return { panel: p, kind: 'move' };
+  }
+  return null;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (!controls) return;
+  const p = pointerPos(e);
+  const hit = hitCorner(p.x, p.y) || hitInside(p.x, p.y);
+  if (!hit) return;
+  const pts = activePts()[hit.panel].map(q => ({ x: q.x, y: q.y }));
+  const off = keyOff[hit.panel].map(q => ({ x: q.x, y: q.y }));
+  drag = { ...hit, x: p.x, y: p.y, pts, off };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const p = pointerPos(e);
+  const dx = p.x - drag.x;
+  const dy = p.y - drag.y;
+  if (drag.kind === 'corner' && mode === 'mask') {
+    mask[drag.panel][drag.index] = { x: p.x, y: p.y };
+  } else if (drag.kind === 'corner') {
+    const base = mask[drag.panel][drag.index];
+    keyOff[drag.panel][drag.index] = { x: p.x - base.x, y: p.y - base.y };
+  } else if (mode === 'mask') {
+    mask[drag.panel] = drag.pts.map(q => ({ x: q.x + dx, y: q.y + dy }));
+  } else {
+    keyOff[drag.panel] = drag.off.map(q => ({ x: q.x + dx, y: q.y + dy }));
+  }
+  applyPanels();
+  drawHandles();
+});
+
+function endDrag() {
+  if (!drag) return;
+  drag = null;
+  saveState();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+function setMode(next) {
+  mode = next;
+  document.getElementById('mode-mask').classList.toggle('active', mode === 'mask');
+  document.getElementById('mode-key').classList.toggle('active', mode === 'keystone');
+  document.getElementById('reset-key').hidden = mode !== 'keystone';
+  applyPanels();
+  drawHandles();
+  saveState();
+}
+
+function resetKeystone() {
+  keyOff = zeroOff();
+  applyPanels();
+  drawHandles();
+  saveState();
+}
+
+document.getElementById('mode-mask').onclick = () => setMode('mask');
+document.getElementById('mode-key').onclick = () => setMode('keystone');
+document.getElementById('reset-key').onclick = resetKeystone;
+
+function setControls(on) {
+  controls = on;
+  document.body.classList.toggle('controls-hidden', !controls);
+  panels.forEach(el => {
+    el.style.pointerEvents = controls ? 'none' : 'auto';
+  });
+  applyPanels();
+  drawHandles();
+}
+
+function onKey(e) {
+  if (e.key === 'h' || e.key === 'H') {
+    e.preventDefault();
+    setControls(!controls);
+  }
+}
+window.addEventListener('keydown', onKey);
+sourceFrame.addEventListener('load', () => {
+  try { sourceFrame.contentWindow.addEventListener('keydown', onKey); } catch (err) {}
+  lastBounds = '';
+  publishBounds();
+});
+window.addEventListener('message', e => {
+  if (!e.data || e.data.type !== 'birdworld-mask-ready') return;
+  lastBounds = '';
+  publishBounds();
+});
+
+function paintMirrors() {
+  const doc = sourceFrame.contentDocument;
+  const birds = doc && doc.querySelector('canvas.p5Canvas');
+  const shader = doc && doc.getElementById('shader-bg');
+  const c = mirrors[0];
+  if (birds && birds.width && c) {
+    if (c.width !== birds.width || c.height !== birds.height) {
+      c.width = birds.width;
+      c.height = birds.height;
+    }
+    const g = c.getContext('2d');
+    if (shader && shader.width) g.drawImage(shader, 0, 0, c.width, c.height);
+    else g.fillStyle = '#000', g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(birds, 0, 0);
+  }
+  requestAnimationFrame(paintMirrors);
+}
+paintMirrors();
+
+window.addEventListener('resize', () => {
+  applyPanels();
+  drawHandles();
+});
+
+loadState();
+setMode(mode);
+setControls(true);
+applyPanels();
+drawHandles();
+</script>
+</body>
+</html>

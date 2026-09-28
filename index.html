@@ -26,28 +26,33 @@
 </audio>
 <script>
   const audio = document.getElementById('bg-audio');
+  const muteAudio = new URLSearchParams(location.search).has('mute');
   function tryPlay() {
     audio.play().catch(() => {});
     window.removeEventListener('click', tryPlay);
     window.removeEventListener('keydown', tryPlay);
     window.removeEventListener('touchstart', tryPlay);
   }
-  window.addEventListener('keydown', function onSpace(e) {
-    if (e.code === 'Space') {
-      audio.play().catch(() => {});
-      window.removeEventListener('keydown', onSpace);
-    }
-  });
-  audio.play().catch(() => {
-    window.addEventListener('click', tryPlay);
-    window.addEventListener('keydown', tryPlay);
-    window.addEventListener('touchstart', tryPlay);
-  });
+  if (!muteAudio) {
+    window.addEventListener('keydown', function onSpace(e) {
+      if (e.code === 'Space') {
+        audio.play().catch(() => {});
+        window.removeEventListener('keydown', onSpace);
+      }
+    });
+    audio.play().catch(() => {
+      window.addEventListener('click', tryPlay);
+      window.addEventListener('keydown', tryPlay);
+      window.addEventListener('touchstart', tryPlay);
+    });
+  }
 </script>
 <script>
 (function () {
   const canvas = document.getElementById('shader-bg');
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  const framedPage = new URLSearchParams(location.search).has('framed');
+  const gl = canvas.getContext('webgl', framedPage ? { preserveDrawingBuffer: true } : {})
+    || canvas.getContext('experimental-webgl');
   if (!gl) return;
 
   const vert = `
@@ -275,6 +280,24 @@ function armKeyList(path, set, gen, onReady) {
     if (gen !== loadGen) return;
     ready = true;
     onReady();
+  }, () => {
+    if (gen !== loadGen) return;
+    onReady(true);
+  });
+}
+
+function loadFromMeta(gen, limit) {
+  clearBirdListeners();
+  const ref = firebase.database().ref('v2/birds_meta').limitToLast(limit);
+  watchRef(ref, 'child_added', snap => {
+    if (gen !== loadGen) return;
+    const data = snap.val() || {};
+    if (settings.showOnlyToday && dayKey(data.createdAt) !== dayKey()) return;
+    if (settings.showOnlyFavorites && !data.starred) return;
+    addBirdById(snap.key, gen);
+  });
+  watchRef(ref, 'child_removed', snap => {
+    if (gen === loadGen) removeDisplayed(snap.key);
   });
 }
 
@@ -303,9 +326,15 @@ async function loadBirds() {
   }
 
   let pending = (settings.showOnlyToday ? 1 : 0) + (settings.showOnlyFavorites ? 1 : 0);
-  const initialFill = () => {
+  let indexDenied = false;
+  const initialFill = (denied) => {
+    if (denied) indexDenied = true;
     pending--;
     if (pending > 0 || gen !== loadGen) return;
+    if (indexDenied) {
+      loadFromMeta(gen, limit);
+      return;
+    }
     const ids = candidateIds().sort().slice(-limit);
     ids.forEach(id => knownKeys.add(id));
     listsReady = true;
@@ -327,7 +356,9 @@ const WING_OX = 710, WING_OY = 325;
 function setup() {
   createCanvas(window.innerWidth, window.innerHeight);
   frameRate(30);
+  if (framed) window.parent.postMessage({ type: 'birdworld-mask-ready' }, '*');
   let filterKey = null;
+  loadBirds();
   firebase.database().ref('v2/settings').on('value', snap => {
     applySettings(snap.val() || {});
     const next = JSON.stringify([settings.maxBirds, settings.showOnlyToday, settings.showOnlyFavorites]);
@@ -335,7 +366,7 @@ function setup() {
       filterKey = next;
       loadBirds();
     }
-  });
+  }, () => {});
 }
 
 function draw() {
@@ -443,13 +474,31 @@ function blendWithWhite(hex, amount) {
   ];
 }
 
+const framed = new URLSearchParams(location.search).has('framed');
+const FLY_PAD = 48;
+let fly = null;
+
+window.addEventListener('message', (e) => {
+  if (!framed || !e.data || e.data.type !== 'birdworld-mask' || !e.data.box) return;
+  fly = e.data.box;
+  if (typeof random !== 'function') return;
+  birds.forEach(b => {
+    const outside = b.x < fly.minX - FLY_PAD || b.x > fly.maxX + FLY_PAD
+      || b.y < fly.minY - FLY_PAD || b.y > fly.maxY + FLY_PAD;
+    if (outside) {
+      b.x = random(fly.minX, fly.maxX);
+      b.y = random(fly.minY, fly.maxY);
+    }
+  });
+});
+
 class Bird {
   constructor(data, storageKey) {
     this.storageKey = storageKey;
     this.starred = data.starred || false;
     this.createdAt = data.createdAt || 0;
-    this.x = random(width);
-    this.y = random(-150, height);
+    this.x = framed && fly ? random(fly.minX, fly.maxX) : random(width);
+    this.y = framed && fly ? random(fly.minY, fly.maxY) : random(-150, height);
     this.scaleFactor = random(0.2, 0.65);
     this.speed = map(this.scaleFactor, 0.2, 0.65, 3.5, 1.5);
     this.vx = random(-1.0, 1.0);
@@ -540,6 +589,17 @@ class Bird {
   update() {
     this.y -= this.speed;
     this.x += this.vx;
+    if (framed && fly) {
+      const left = fly.minX - FLY_PAD;
+      const right = fly.maxX + FLY_PAD;
+      if (this.x < left) this.x = right;
+      if (this.x > right) this.x = left;
+      if (this.y < fly.minY - FLY_PAD) {
+        this.y = fly.maxY + FLY_PAD;
+        this.x = random(fly.minX, fly.maxX);
+      }
+      return;
+    }
     if (this.x < -150) this.x = width + 150;
     if (this.x > width + 150) this.x = -150;
     if (this.y < -150) {
