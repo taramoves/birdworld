@@ -63,6 +63,8 @@
     <button type="button" id="mode-mask" class="active">MASK</button>
     <button type="button" id="mode-key">KEYSTONE</button>
     <button type="button" id="reset-key" hidden>RESET</button>
+    <button type="button" id="undo-layout">UNDO</button>
+    <button type="button" id="save-layout">SAVE</button>
     <span>H hides controls</span>
   </div>
 <script>
@@ -78,6 +80,7 @@ let controls = true;
 let mask = [];
 let keyOff = [];
 let drag = null;
+let history = [];
 
 function square(x, y, s) {
   return [
@@ -131,6 +134,11 @@ function loadState() {
   } catch (e) {}
 }
 
+function snapshot() {
+  const pack = pts => pts.map(p => p.map(q => ({ x: q.x, y: q.y })));
+  return { mode, mask: pack(mask), keyOff: pack(keyOff) };
+}
+
 function saveState() {
   const pack = pts => pts.map(p => ({ x: p.x, y: p.y }));
   localStorage.setItem(STORE, JSON.stringify({
@@ -140,6 +148,22 @@ function saveState() {
     mask: mask.map(pack),
     keyOff: keyOff.map(pack)
   }));
+}
+
+function remember() {
+  history.push(snapshot());
+  if (history.length > 40) history.shift();
+}
+
+function applySnapshot(snap) {
+  mode = snap.mode;
+  mask = snap.mask.map(poly => poly.map(p => ({ x: p.x, y: p.y })));
+  keyOff = snap.keyOff.map(poly => poly.map(p => ({ x: p.x, y: p.y })));
+  document.getElementById('mode-mask').classList.toggle('active', mode === 'mask');
+  document.getElementById('mode-key').classList.toggle('active', mode === 'keystone');
+  document.getElementById('reset-key').hidden = mode !== 'keystone';
+  applyPanels();
+  drawHandles();
 }
 
 function quadToMatrix(src, dst) {
@@ -278,6 +302,7 @@ canvas.addEventListener('pointerdown', e => {
   const p = pointerPos(e);
   const hit = hitCorner(p.x, p.y) || hitInside(p.x, p.y);
   if (!hit) return;
+  remember();
   const pts = activePts()[hit.panel].map(q => ({ x: q.x, y: q.y }));
   const off = keyOff[hit.panel].map(q => ({ x: q.x, y: q.y }));
   drag = { ...hit, x: p.x, y: p.y, pts, off };
@@ -306,31 +331,47 @@ canvas.addEventListener('pointermove', e => {
 function endDrag() {
   if (!drag) return;
   drag = null;
-  saveState();
 }
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
 
 function setMode(next) {
+  if (next !== mode) remember();
   mode = next;
   document.getElementById('mode-mask').classList.toggle('active', mode === 'mask');
   document.getElementById('mode-key').classList.toggle('active', mode === 'keystone');
   document.getElementById('reset-key').hidden = mode !== 'keystone';
   applyPanels();
   drawHandles();
-  saveState();
 }
 
 function resetKeystone() {
+  remember();
   keyOff = zeroOff();
   applyPanels();
   drawHandles();
+}
+
+function undoLayout() {
+  drag = null;
+  const snap = history.pop();
+  if (!snap) return;
+  applySnapshot(snap);
+}
+
+function saveLayout() {
   saveState();
+  const btn = document.getElementById('save-layout');
+  btn.textContent = 'SAVED';
+  clearTimeout(saveLayout.timer);
+  saveLayout.timer = setTimeout(() => { btn.textContent = 'SAVE'; }, 1200);
 }
 
 document.getElementById('mode-mask').onclick = () => setMode('mask');
 document.getElementById('mode-key').onclick = () => setMode('keystone');
 document.getElementById('reset-key').onclick = resetKeystone;
+document.getElementById('undo-layout').onclick = undoLayout;
+document.getElementById('save-layout').onclick = saveLayout;
 
 function setControls(on) {
   controls = on;
