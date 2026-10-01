@@ -56,6 +56,9 @@
   <script src="https://cdn.jsdelivr.net/gh/osresearch/p5.projection@0.2.1/library/p5.projection.js"></script>
 </head>
 <body>
+  <audio id="bg-audio" loop>
+    <source src="taras-birdworld-MASTER.mp3" type="audio/mpeg">
+  </audio>
   <div class="panel" id="panel-0"><iframe id="source" src="index.html?mute=1&framed=1"></iframe></div>
   <div class="panel" id="panel-1"><canvas></canvas></div>
   <canvas id="handles"></canvas>
@@ -68,6 +71,19 @@
     <span>H hides controls</span>
   </div>
 <script>
+const bgAudio = document.getElementById('bg-audio');
+function tryPlayAudio() {
+  bgAudio.play().catch(() => {});
+  window.removeEventListener('click', tryPlayAudio);
+  window.removeEventListener('keydown', tryPlayAudio);
+  window.removeEventListener('touchstart', tryPlayAudio);
+}
+bgAudio.play().catch(() => {
+  window.addEventListener('click', tryPlayAudio);
+  window.addEventListener('keydown', tryPlayAudio);
+  window.addEventListener('touchstart', tryPlayAudio);
+});
+
 const STORE = 'birdworld-multi-v2';
 const sourceFrame = document.getElementById('source');
 const panels = [document.getElementById('panel-0'), document.getElementById('panel-1')];
