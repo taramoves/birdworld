@@ -453,23 +453,33 @@ function dayKey(ts) {
   return d.getFullYear() + '-' + m + '-' + day;
 }
 
+function yesterdayKey() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dayKey(d.getTime());
+}
+
 async function chooseBirdIds(s, maxN) {
   if (!s.showOnlyToday && !s.showOnlyFavorites) {
     const metaSnap = await firebase.database().ref('v2/birds_meta').limitToLast(maxN).once('value');
     const ids = [];
-    metaSnap.forEach(child => ids.push(child.key));
+    metaSnap.forEach(child => { ids.push(child.key); });
     return ids;
   }
 
   const dayKeys = [];
   const starKeys = [];
   if (s.showOnlyToday) {
-    const snap = await firebase.database().ref('v2/days/' + dayKey()).once('value');
-    snap.forEach(child => dayKeys.push(child.key));
+    const days = [dayKey()];
+    if (s.includeYesterday) days.push(yesterdayKey());
+    for (const day of days) {
+      const snap = await firebase.database().ref('v2/days/' + day).once('value');
+      snap.forEach(child => { dayKeys.push(child.key); });
+    }
   }
   if (s.showOnlyFavorites) {
     const snap = await firebase.database().ref('v2/starred').once('value');
-    snap.forEach(child => starKeys.push(child.key));
+    snap.forEach(child => { starKeys.push(child.key); });
   }
 
   let ids;
@@ -522,7 +532,7 @@ firebase.database().ref('v2/settings').on('value', snap => {
   const s = snap.val() || {};
   applyBackground(s.background || 'hills');
 
-  const filterKey = JSON.stringify([s.showOnlyToday, s.showOnlyFavorites, s.maxBirds]);
+  const filterKey = JSON.stringify([s.showOnlyToday, s.includeYesterday, s.showOnlyFavorites, s.maxBirds]);
   if (filterKey !== _prevFilter) {
     _prevFilter = filterKey;
     reloadBirds(s);

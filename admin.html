@@ -284,6 +284,10 @@
         <div class="n" id="count-today">0</div>
         <div class="l">Today</div>
       </div>
+      <div class="stat">
+        <div class="n" id="count-yesterday">0</div>
+        <div class="l">Yesterday</div>
+      </div>
     </div>
     <div id="bird-list"></div>
     <button class="btn" id="load-older" hidden style="margin-top:12px">Load older</button>
@@ -311,6 +315,16 @@
       </div>
       <label class="tog">
         <input type="checkbox" id="today-only">
+        <div class="tog-track"></div>
+      </label>
+    </div>
+    <div class="setting">
+      <div>
+        <div class="lbl">Include yesterday</div>
+        <div class="desc">With today's birds only, also show birds from yesterday</div>
+      </div>
+      <label class="tog">
+        <input type="checkbox" id="include-yesterday">
         <div class="tog-track"></div>
       </label>
     </div>
@@ -528,6 +542,12 @@
     return d.getFullYear() + '-' + m + '-' + day;
   }
 
+  function yesterdayKey() {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return dayKey(d.getTime());
+  }
+
   function removeBirdRow(key) {
     allBirds = allBirds.filter(b => b.key !== key);
     const row = document.querySelector('.bird-row[data-key="' + key + '"]');
@@ -570,7 +590,7 @@
     if (beforeKey) query = query.endBefore(beforeKey);
     const snap = await query.limitToLast(PAGE_SIZE).once('value');
     const items = [];
-    snap.forEach(child => items.push(child));
+    snap.forEach(child => { items.push(child); });
     if (items.length < PAGE_SIZE) noMoreBirds = true;
     if (!items.length) {
       noMoreBirds = true;
@@ -665,6 +685,9 @@
   db.ref('v2/stats/days/' + dayKey()).on('value', snap => {
     document.getElementById('count-today').textContent = snap.val() || 0;
   }, () => {});
+  db.ref('v2/stats/days/' + yesterdayKey()).on('value', snap => {
+    document.getElementById('count-yesterday').textContent = snap.val() || 0;
+  }, () => {});
 
   loadMetaPage(null).then(() => {
     document.getElementById('load-bar').classList.add('done');
@@ -684,7 +707,7 @@
     const day = dayKey();
     const snap = await db.ref('v2/days/' + day).once('value');
     const ids = [];
-    snap.forEach(child => ids.push(child.key));
+    snap.forEach(child => { ids.push(child.key); });
     await deleteBirdIds(ids);
     await db.ref('v2/days/' + day).remove();
     await db.ref('v2/stats/days/' + day).remove();
@@ -803,6 +826,7 @@
     db.ref('v2/settings').update({
       maxBirds: parseInt(document.getElementById('max-birds').value) || 0,
       showOnlyToday: document.getElementById('today-only').checked,
+      includeYesterday: document.getElementById('include-yesterday').checked,
       showOnlyFavorites: document.getElementById('favorites-only').checked,
       background: currentBg,
       colorPalette: currentPalette,
@@ -827,6 +851,7 @@
       : [...ALL_COLORS];
     document.getElementById('max-birds').value = s.maxBirds || 0;
     document.getElementById('today-only').checked = !!s.showOnlyToday;
+    document.getElementById('include-yesterday').checked = !!s.includeYesterday;
     document.getElementById('favorites-only').checked = !!s.showOnlyFavorites;
     // Only rebuild pickers if values differ from defaults
     if (newBg !== currentBg) { currentBg = newBg; buildBgPicker(currentBg); }
@@ -838,6 +863,7 @@
 
   document.getElementById('max-birds').onchange = saveSettings;
   document.getElementById('today-only').onchange = saveSettings;
+  document.getElementById('include-yesterday').onchange = saveSettings;
   document.getElementById('favorites-only').onchange = saveSettings;
 </script>
 </body>

@@ -174,7 +174,7 @@
 
 let birds = [];
 let knownKeys = new Set();
-let settings = { maxBirds: 0, showOnlyToday: false, showOnlyFavorites: false };
+let settings = { maxBirds: 0, showOnlyToday: false, includeYesterday: false, showOnlyFavorites: false };
 let birdListeners = [];
 let daySet = new Set();
 let starSet = new Set();
@@ -184,6 +184,7 @@ let listsReady = false;
 function applySettings(s) {
   settings.maxBirds = s.maxBirds || 0;
   settings.showOnlyToday = !!s.showOnlyToday;
+  settings.includeYesterday = !!s.includeYesterday;
   settings.showOnlyFavorites = !!s.showOnlyFavorites;
   if (window.setBirdBackground) window.setBirdBackground(s.background || 'hills');
 }
@@ -193,6 +194,12 @@ function dayKey(ts) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return d.getFullYear() + '-' + m + '-' + day;
+}
+
+function yesterdayKey() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dayKey(d.getTime());
 }
 
 function displayLimit() {
@@ -292,7 +299,7 @@ function loadFromMeta(gen, limit) {
   watchRef(ref, 'child_added', snap => {
     if (gen !== loadGen) return;
     const data = snap.val() || {};
-    if (settings.showOnlyToday && dayKey(data.createdAt) !== dayKey()) return;
+    if (settings.showOnlyToday && dayKey(data.createdAt) !== dayKey() && !(settings.includeYesterday && dayKey(data.createdAt) === yesterdayKey())) return;
     if (settings.showOnlyFavorites && !data.starred) return;
     addBirdById(snap.key, gen);
   });
@@ -325,7 +332,8 @@ async function loadBirds() {
     return;
   }
 
-  let pending = (settings.showOnlyToday ? 1 : 0) + (settings.showOnlyFavorites ? 1 : 0);
+  let pending = (settings.showOnlyFavorites ? 1 : 0);
+  if (settings.showOnlyToday) pending += settings.includeYesterday ? 2 : 1;
   let indexDenied = false;
   const initialFill = (denied) => {
     if (denied) indexDenied = true;
@@ -341,7 +349,10 @@ async function loadBirds() {
     ids.forEach(id => addBirdById(id, gen));
   };
 
-  if (settings.showOnlyToday) armKeyList('v2/days/' + dayKey(), daySet, gen, initialFill);
+  if (settings.showOnlyToday) {
+    armKeyList('v2/days/' + dayKey(), daySet, gen, initialFill);
+    if (settings.includeYesterday) armKeyList('v2/days/' + yesterdayKey(), daySet, gen, initialFill);
+  }
   if (settings.showOnlyFavorites) armKeyList('v2/starred', starSet, gen, initialFill);
 }
 
@@ -361,7 +372,7 @@ function setup() {
   loadBirds();
   firebase.database().ref('v2/settings').on('value', snap => {
     applySettings(snap.val() || {});
-    const next = JSON.stringify([settings.maxBirds, settings.showOnlyToday, settings.showOnlyFavorites]);
+    const next = JSON.stringify([settings.maxBirds, settings.showOnlyToday, settings.includeYesterday, settings.showOnlyFavorites]);
     if (next !== filterKey) {
       filterKey = next;
       loadBirds();
@@ -478,6 +489,44 @@ const framed = new URLSearchParams(location.search).has('framed');
 const FLY_PAD = 48;
 let fly = null;
 
+function playfield() {
+  if (framed && fly) return { box: fly, pad: FLY_PAD };
+  return { box: { minX: 0, minY: 0, maxX: width, maxY: height }, pad: 120 };
+}
+
+function setCourse(bird, angle) {
+  bird.vx = Math.cos(angle) * bird.speed;
+  bird.vy = Math.sin(angle) * bird.speed;
+}
+
+function startInside(bird, box) {
+  bird.x = random(box.minX, box.maxX);
+  bird.y = random(box.minY, box.maxY);
+  setCourse(bird, random(TWO_PI));
+}
+
+function enterFromEdge(bird, box, pad) {
+  const edge = Math.floor(random(4));
+  const spread = 0.7;
+  if (edge === 0) {
+    bird.x = random(box.minX, box.maxX);
+    bird.y = box.minY - pad;
+    setCourse(bird, HALF_PI + random(-spread, spread));
+  } else if (edge === 1) {
+    bird.x = box.maxX + pad;
+    bird.y = random(box.minY, box.maxY);
+    setCourse(bird, Math.PI + random(-spread, spread));
+  } else if (edge === 2) {
+    bird.x = random(box.minX, box.maxX);
+    bird.y = box.maxY + pad;
+    setCourse(bird, -HALF_PI + random(-spread, spread));
+  } else {
+    bird.x = box.minX - pad;
+    bird.y = random(box.minY, box.maxY);
+    setCourse(bird, random(-spread, spread));
+  }
+}
+
 window.addEventListener('message', (e) => {
   if (!framed || !e.data || e.data.type !== 'birdworld-mask' || !e.data.box) return;
   fly = e.data.box;
@@ -485,10 +534,7 @@ window.addEventListener('message', (e) => {
   birds.forEach(b => {
     const outside = b.x < fly.minX - FLY_PAD || b.x > fly.maxX + FLY_PAD
       || b.y < fly.minY - FLY_PAD || b.y > fly.maxY + FLY_PAD;
-    if (outside) {
-      b.x = random(fly.minX, fly.maxX);
-      b.y = random(fly.minY, fly.maxY);
-    }
+    if (outside) startInside(b, fly);
   });
 });
 
@@ -497,13 +543,12 @@ class Bird {
     this.storageKey = storageKey;
     this.starred = data.starred || false;
     this.createdAt = data.createdAt || 0;
-    this.x = framed && fly ? random(fly.minX, fly.maxX) : random(width);
-    this.y = framed && fly ? random(fly.minY, fly.maxY) : random(-150, height);
-    this.scaleFactor = random(0.2, 0.65);
-    this.speed = map(this.scaleFactor, 0.2, 0.65, 3.5, 1.5);
-    this.vx = random(-1.0, 1.0);
+    this.scaleFactor = random(0.1, 0.325);
+    this.speed = map(this.scaleFactor, 0.1, 0.325, 3.5, 1.5);
+    const area = framed && fly ? fly : { minX: 0, minY: 0, maxX: width, maxY: height };
+    startInside(this, area);
 
-    this.flapSpeed = map(this.scaleFactor, 0.2, 0.65, 0.14, 0.07);
+    this.flapSpeed = map(this.scaleFactor, 0.1, 0.325, 0.14, 0.07);
     this.phase = random(TWO_PI);
 
     // Body buffer
@@ -587,29 +632,16 @@ class Bird {
   }
 
   update() {
-    this.y -= this.speed;
     this.x += this.vx;
-    if (framed && fly) {
-      const left = fly.minX - FLY_PAD;
-      const right = fly.maxX + FLY_PAD;
-      if (this.x < left) this.x = right;
-      if (this.x > right) this.x = left;
-      if (this.y < fly.minY - FLY_PAD) {
-        this.y = fly.maxY + FLY_PAD;
-        this.x = random(fly.minX, fly.maxX);
-      }
-      return;
-    }
-    if (this.x < -150) this.x = width + 150;
-    if (this.x > width + 150) this.x = -150;
-    if (this.y < -150) {
-      this.y = height + 150;
-      this.x = random(width);
-    }
+    this.y += this.vy;
+    const { box, pad } = playfield();
+    const outside = this.x < box.minX - pad || this.x > box.maxX + pad
+      || this.y < box.minY - pad || this.y > box.maxY + pad;
+    if (outside) enterFromEdge(this, box, pad);
   }
 
   display() {
-    const heading = atan2(-this.speed, this.vx) + HALF_PI;
+    const heading = atan2(this.vy, this.vx) + HALF_PI;
     const ws = map(cos(frameCount * this.flapSpeed + this.phase), -1, 1, 0.72, 1.0);
 
     const shadowOffX = constrain((this.x - width  * 0.5) * 0.18, -55, 55);
